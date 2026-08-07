@@ -1,0 +1,72 @@
+# XcodeGen project spec. Generate the .xcodeproj with:
+#   brew install xcodegen   (one-time, on a Mac)
+#   xcodegen generate
+#
+# We hand-author this YAML instead of a .xcodeproj/.pbxproj because a pbxproj
+# is a large, easy-to-corrupt generated format meant to be edited by Xcode's
+# GUI, not by hand or by an agent that can't open Xcode to verify the result.
+# XcodeGen's YAML is plain text, diffable, and regenerates a fresh, valid
+# .xcodeproj deterministically every time.
+name: ViolinCoach
+options:
+  bundleIdPrefix: com.violincoach
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+configs:
+  Debug: debug
+  Release: release
+packages:
+  VexFoundation:
+    url: https://github.com/migueldeicaza/VexFoundation
+    # No tagged release exists yet at time of writing; pinned to a specific
+    # commit for reproducibility rather than tracking a moving branch.
+    # Re-pin to a released version once VexFoundation cuts one.
+    revision: 252b9a7a9cc6583dbff50f984bf33e8448bce72f
+targets:
+  ViolinCoach:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/ViolinCoach
+    dependencies:
+      - package: VexFoundation
+    info:
+      path: Sources/ViolinCoach/Info.plist
+      properties:
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        NSMicrophoneUsageDescription: >-
+          ViolinCoach listens through the microphone to detect the pitch
+          you're playing, for tuning and real-time practice feedback. Audio
+          is analyzed on-device only and is never recorded or uploaded.
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.violincoach.app
+        SWIFT_VERSION: "6.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+  ViolinCoachTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/ViolinCoachTests
+    dependencies:
+      - target: ViolinCoach
+    settings:
+      base:
+        SWIFT_VERSION: "6.0"
+schemes:
+  ViolinCoach:
+    build:
+      targets:
+        ViolinCoach: all
+        ViolinCoachTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - ViolinCoachTests

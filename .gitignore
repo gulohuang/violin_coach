@@ -1,0 +1,21 @@
+# macOS
+.DS_Store
+
+# Xcode / XcodeGen
+# ViolinCoach.xcodeproj is generated from project.yml — do not commit it.
+*.xcodeproj
+*.xcworkspace
+!*.xcodeproj/project.xcworkspace
+xcuserdata/
+DerivedData/
+build/
+*.xcuserstate
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Node (web prototype)
+node_modules/
+dist/
