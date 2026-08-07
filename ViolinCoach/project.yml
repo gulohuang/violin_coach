@@ -43,7 +43,12 @@ targets:
           is analyzed on-device only and is never recorded or uploaded.
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.violincoach.app
+        # Bundle IDs are globally unique across all Apple developer accounts,
+        # so this must be namespaced to a domain/account you control —
+        # com.violincoach.app was already registered to someone else.
+        # Override without editing this file:
+        #   xcodegen generate && xcodebuild ... PRODUCT_BUNDLE_IDENTIFIER=com.you.violincoach
+        PRODUCT_BUNDLE_IDENTIFIER: com.gulohuang.violincoach
         SWIFT_VERSION: "6.0"
         TARGETED_DEVICE_FAMILY: "1,2"
         MARKETING_VERSION: "0.1.0"

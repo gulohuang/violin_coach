@@ -145,7 +145,7 @@ Simulator control via `xcrun simctl`:
 xcrun simctl list devices available
 xcrun simctl boot "iPhone 16"
 xcrun simctl install booted /path/to/ViolinCoach.app
-xcrun simctl launch booted com.violincoach.app
+xcrun simctl launch booted com.gulohuang.violincoach
 xcrun simctl io booted screenshot /tmp/shot.png
 ```
 
@@ -160,6 +160,14 @@ claude mcp add ios-simulator -- npx -y ios-simulator-mcp
 
 XcodeBuildMCP is a reasonable alternative/complement for higher-level
 build-run-test orchestration. Xcode 26.3+ also ships a native Xcode MCP.
+
+### Code signing
+
+The bundle ID (`PRODUCT_BUNDLE_IDENTIFIER` in `project.yml`) is globally
+unique across every Apple developer account, so it must be namespaced to a
+domain/account you control. Simulator builds need no signing at all — if
+Xcode is trying to register the identifier with your team, you have a
+physical device selected, or a team set on a target that doesn't need one.
 
 ### Microphone testing caveat
 
