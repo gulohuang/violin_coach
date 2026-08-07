@@ -35,7 +35,7 @@ struct ScorePlayerView: View {
                     .padding(.bottom, 24)
                 } else if let error = viewModel.loadError {
                     Spacer()
-                    ContentUnavailableView("Couldn't load score", systemImage: "exclamationmark.triangle", description: Text(error))
+                    ScoreUnavailableView(title: "Couldn't load score", message: error)
                     Spacer()
                 } else {
                     Spacer()
@@ -49,6 +49,8 @@ struct ScorePlayerView: View {
     }
 }
 
-#Preview {
-    ScorePlayerView()
+struct ScorePlayerView_Previews: PreviewProvider {
+    static var previews: some View {
+        ScorePlayerView()
+    }
 }

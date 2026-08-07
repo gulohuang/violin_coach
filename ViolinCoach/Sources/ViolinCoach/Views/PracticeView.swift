@@ -47,7 +47,7 @@ struct PracticeView: View {
                     .padding(.bottom, 24)
                 } else if let error = viewModel.loadError {
                     Spacer()
-                    ContentUnavailableView("Couldn't load score", systemImage: "exclamationmark.triangle", description: Text(error))
+                    ScoreUnavailableView(title: "Couldn't load score", message: error)
                     Spacer()
                 } else {
                     Spacer()
@@ -94,7 +94,7 @@ private struct FeedbackBadge: View {
                     }
                 }
                 .font(.title3.bold())
-                .animation(.snappy, value: direction)
+                .animation(.spring(response: 0.3, dampingFraction: 0.75), value: direction)
             } else {
                 Text("Tap Start Practice to begin")
                     .foregroundStyle(.secondary)
@@ -105,6 +105,8 @@ private struct FeedbackBadge: View {
     }
 }
 
-#Preview {
-    PracticeView()
+struct PracticeView_Previews: PreviewProvider {
+    static var previews: some View {
+        PracticeView()
+    }
 }

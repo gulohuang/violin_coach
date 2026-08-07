@@ -9,6 +9,29 @@ import VexFoundation
 /// The score scrolls horizontally (user-driven) rather than auto-scrolling
 /// to follow the cursor — auto-scroll-to-cursor is a known follow-up, not
 /// implemented in this first version (see CLAUDE.md).
+/// Stands in for `ContentUnavailableView`, which is iOS 17+ while this app
+/// targets iOS 16. Same role: a centered icon/title/message for an empty or
+/// failed state.
+struct ScoreUnavailableView: View {
+    let title: String
+    let message: String
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.largeTitle)
+                .foregroundStyle(.secondary)
+            Text(title)
+                .font(.headline)
+            Text(message)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(32)
+    }
+}
+
 struct ScoreCanvasView: View {
     let score: Score
     let currentPlayableIndex: Int

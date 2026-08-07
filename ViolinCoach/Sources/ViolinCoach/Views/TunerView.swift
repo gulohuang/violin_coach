@@ -15,7 +15,7 @@ struct TunerView: View {
                     .font(.system(size: 96, weight: .bold, design: .rounded))
                     .foregroundStyle(viewModel.hasSignal ? (viewModel.isInTune ? .green : .primary) : .secondary)
                     .contentTransition(.numericText())
-                    .animation(.snappy, value: viewModel.noteLabel)
+                    .animation(.spring(response: 0.3, dampingFraction: 0.75), value: viewModel.noteLabel)
 
                 Text(viewModel.frequencyLabel)
                     .font(.title3.monospacedDigit())
@@ -85,13 +85,15 @@ private struct CentsMeter: View {
                         .fill(isInTune ? .green : .orange)
                         .frame(width: 20, height: 20)
                         .position(x: needleX, y: geo.size.height / 2)
-                        .animation(.snappy, value: needleX)
+                        .animation(.spring(response: 0.3, dampingFraction: 0.75), value: needleX)
                 }
             }
         }
     }
 }
 
-#Preview {
-    TunerView()
+struct TunerView_Previews: PreviewProvider {
+    static var previews: some View {
+        TunerView()
+    }
 }
