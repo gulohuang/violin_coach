@@ -59,7 +59,14 @@ public final class ScoreAudioPlayer: ObservableObject {
                         sampleRate: renderFormat.sampleRate,
                         a4: a4
                     ) {
-                        playerNode.scheduleBuffer(buffer, at: nil)
+                        // The explicit completionHandler selects the
+                        // fire-and-forget overload. In an async context the
+                        // bare `scheduleBuffer(_:at:)` resolves to the `async`
+                        // one, which suspends until the buffer finishes
+                        // playing — that would make each note wait for the
+                        // previous one instead of being queued ahead of time,
+                        // and the loop below already handles note timing.
+                        playerNode.scheduleBuffer(buffer, at: nil, options: [], completionHandler: nil)
                     }
                 }
                 try? await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000))
