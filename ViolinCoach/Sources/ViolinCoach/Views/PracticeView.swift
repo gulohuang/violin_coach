@@ -28,14 +28,15 @@ struct PracticeView: View {
     private func loaded(score: Score) -> some View {
         VStack(spacing: Theme.Spacing.lg) {
             VStack(spacing: Theme.Spacing.sm) {
+                // Greedy: takes the height left over from the feedback card
+                // and transport, and scrolls internally.
                 ScoreCanvasView(score: score, currentPlayableIndex: viewModel.currentIndex)
+                    .frame(maxHeight: .infinity)
                 ScoreProgressBar(
                     current: viewModel.currentIndex,
                     total: score.playableNotes.count
                 )
             }
-
-            Spacer(minLength: Theme.Spacing.md)
 
             FeedbackCard(
                 isActive: viewModel.isActive,
@@ -43,8 +44,6 @@ struct PracticeView: View {
                 direction: viewModel.direction,
                 expectedNoteLabel: viewModel.expectedNoteLabel
             )
-
-            Spacer(minLength: Theme.Spacing.md)
 
             Button {
                 if viewModel.isActive {

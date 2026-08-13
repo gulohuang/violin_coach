@@ -36,8 +36,9 @@ struct ScoreUnavailableView: View {
 /// is — fixes that without having to restyle every stave and note for a
 /// second ink palette.
 ///
-/// The score scrolls horizontally by hand; auto-scrolling to keep the cursor
-/// on screen is a known follow-up (see CLAUDE.md).
+/// Measures wrap onto as many rows as the available width allows and the
+/// whole thing scrolls vertically, the way printed music reads. Auto-scrolling
+/// to keep the cursor on screen is still a follow-up (see CLAUDE.md).
 struct ScoreCanvasView: View {
     let score: Score
     let currentPlayableIndex: Int
@@ -45,28 +46,38 @@ struct ScoreCanvasView: View {
     private let metrics = ScoreRenderer.Metrics()
 
     var body: some View {
-        let size = ScoreRenderer.canvasSize(for: score, metrics: metrics)
-        ScrollView(.horizontal, showsIndicators: false) {
-            VexCanvas(width: size.width, height: size.height) { context in
-                context.clear()
-                let layout = ScoreRenderer.draw(score: score, into: context, metrics: metrics)
-                guard currentPlayableIndex >= 0,
-                      let position = layout.notePositions.first(where: { $0.playableIndex == currentPlayableIndex })
-                else { return }
+        GeometryReader { geo in
+            let size = ScoreRenderer.canvasSize(
+                for: score,
+                availableWidth: geo.size.width,
+                metrics: metrics
+            )
+            ScrollView(.vertical, showsIndicators: false) {
+                VexCanvas(width: size.width, height: size.height) { context in
+                    context.clear()
+                    let layout = ScoreRenderer.draw(
+                        score: score,
+                        into: context,
+                        availableWidth: geo.size.width,
+                        metrics: metrics
+                    )
+                    guard currentPlayableIndex >= 0,
+                          let position = layout.notePositions.first(where: { $0.playableIndex == currentPlayableIndex })
+                    else { return }
 
-                let cursorWidth = 26.0
-                let cursorPadding = 10.0
-                _ = context.setFillStyle(Theme.Palette.scoreCursorCSS)
-                _ = context.fillRect(
-                    position.x - cursorWidth / 2,
-                    position.staveY - cursorPadding,
-                    cursorWidth,
-                    position.staveHeight + cursorPadding * 2
-                )
+                    let cursorWidth = 22.0
+                    let cursorPadding = 8.0
+                    _ = context.setFillStyle(Theme.Palette.scoreCursorCSS)
+                    _ = context.fillRect(
+                        position.x - cursorWidth / 2,
+                        position.staffTopY - cursorPadding,
+                        cursorWidth,
+                        position.staffBottomY - position.staffTopY + cursorPadding * 2
+                    )
+                }
+                .frame(width: size.width, height: size.height)
             }
-            .frame(width: size.width, height: size.height)
         }
-        .frame(height: size.height)
         .background(
             RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
                 .fill(Theme.Palette.paper)

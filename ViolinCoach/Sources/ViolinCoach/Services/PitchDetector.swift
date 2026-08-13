@@ -12,7 +12,20 @@ public final class PitchDetector: ObservableObject {
     @Published public private(set) var isListening = false
     @Published public var a4Reference: Double = 440
 
-    private let engine = AVAudioEngine()
+    /// The engine lives off the main actor. `AVAudioSession.setActive`,
+    /// `AVAudioEngine.prepare()` and `.start()` are synchronous CoreAudio
+    /// calls that routinely block for hundreds of milliseconds — longer the
+    /// first time, while the hardware route is set up. Running them on the
+    /// main thread froze the UI on every button press.
+    ///
+    /// Only ever touched on `audioQueue`, which is serial; that discipline is
+    /// what makes the `@unchecked` conformance honest.
+    private final class EngineBox: @unchecked Sendable {
+        let engine = AVAudioEngine()
+    }
+
+    private nonisolated let engineBox = EngineBox()
+    private nonisolated let audioQueue = DispatchQueue(label: "com.violincoach.audio-engine")
     private let bufferSize: AVAudioFrameCount = 4096
 
     /// Autocorrelation is far too expensive to run on the main thread: at
@@ -58,70 +71,94 @@ public final class PitchDetector: ObservableObject {
         let granted = await requestMicPermission()
         guard granted else { return }
 
-        do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker, .mixWithOthers])
-            try session.setActive(true)
-        } catch {
-            #if DEBUG
-            print("PitchDetector: failed to configure audio session: \(error)")
-            #endif
-            return
-        }
-
-        let input = engine.inputNode
-        let format = input.outputFormat(forBus: 0)
-        guard format.sampleRate > 0 else { return }
-
         runToken += 1
         let token = runToken
         let window = analysisWindow
-        // Read off the format up front: AVAudioFormat is a reference type, and
-        // capturing it in the tap closure would drag a non-Sendable class
-        // across a concurrency boundary. A Double crosses cleanly.
-        let sampleRate = format.sampleRate
+        let bufferSize = self.bufferSize
 
-        input.removeTap(onBus: 0)
-        input.installTap(onBus: 0, bufferSize: bufferSize, format: format) { [weak self] buffer, _ in
-            guard let self, let channelData = buffer.floatChannelData else { return }
-            // Keep this callback cheap — it runs on a real-time audio thread.
-            // Copy the samples we need and get off it immediately.
-            let frameCount = min(Int(buffer.frameLength), window)
-            let samples = Array(UnsafeBufferPointer(start: channelData[0], count: frameCount))
+        // Everything that can block goes to the audio queue; the main actor
+        // only waits on the continuation, which doesn't hold up the run loop.
+        let started = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            audioQueue.async { [engineBox, analysisQueue, gate] in
+                let engine = engineBox.engine
+                do {
+                    let session = AVAudioSession.sharedInstance()
+                    try session.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker, .mixWithOthers])
+                    try session.setActive(true)
+                } catch {
+                    #if DEBUG
+                    print("PitchDetector: failed to configure audio session: \(error)")
+                    #endif
+                    continuation.resume(returning: false)
+                    return
+                }
 
-            self.analysisQueue.async {
-                guard !self.gate.isBusy else { return } // drop, don't queue
-                self.gate.isBusy = true
-                defer { self.gate.isBusy = false }
+                let input = engine.inputNode
+                let format = input.outputFormat(forBus: 0)
+                guard format.sampleRate > 0 else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                // Read off the format up front: AVAudioFormat is a reference
+                // type, and capturing it in the tap closure would drag a
+                // non-Sendable class across a concurrency boundary.
+                let sampleRate = format.sampleRate
 
-                let detected = PitchMath.autoCorrelate(samples, sampleRate: sampleRate, maxWindow: window)
-                Task { @MainActor in
-                    self.publish(frequency: detected, token: token)
+                input.removeTap(onBus: 0)
+                input.installTap(onBus: 0, bufferSize: bufferSize, format: format) { [weak self] buffer, _ in
+                    guard let self, let channelData = buffer.floatChannelData else { return }
+                    // Keep this callback cheap — it runs on a real-time audio
+                    // thread. Copy what's needed and get off it immediately.
+                    let frameCount = min(Int(buffer.frameLength), window)
+                    let samples = Array(UnsafeBufferPointer(start: channelData[0], count: frameCount))
+
+                    analysisQueue.async {
+                        guard !gate.isBusy else { return } // drop, don't queue
+                        gate.isBusy = true
+                        defer { gate.isBusy = false }
+
+                        let detected = PitchMath.autoCorrelate(samples, sampleRate: sampleRate, maxWindow: window)
+                        Task { @MainActor in
+                            self.publish(frequency: detected, token: token)
+                        }
+                    }
+                }
+
+                do {
+                    engine.prepare()
+                    try engine.start()
+                    continuation.resume(returning: true)
+                } catch {
+                    #if DEBUG
+                    print("PitchDetector: failed to start engine: \(error)")
+                    #endif
+                    input.removeTap(onBus: 0)
+                    continuation.resume(returning: false)
                 }
             }
         }
 
-        do {
-            engine.prepare()
-            try engine.start()
-            isListening = true
-        } catch {
-            #if DEBUG
-            print("PitchDetector: failed to start engine: \(error)")
-            #endif
-        }
+        // A stop may have landed while the engine was spinning up.
+        guard token == runToken else { return }
+        isListening = started
     }
 
     public func stop() {
         guard isListening else { return }
-        // Bumping the token first invalidates any analysis already dispatched,
-        // so an in-flight reading can't repopulate the display after this.
+        // Published state changes right now so the button flips immediately —
+        // the user should never wait on CoreAudio to see a tap register.
+        // Bumping the token first also invalidates analyses already in flight,
+        // so none of them can repopulate the readout after this.
         runToken += 1
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
         isListening = false
         frequency = nil
         note = nil
+
+        // Teardown is the slow part; let it happen off the main thread.
+        audioQueue.async { [engineBox] in
+            engineBox.engine.inputNode.removeTap(onBus: 0)
+            engineBox.engine.stop()
+        }
     }
 
     /// Applies a completed analysis, ignoring anything from a previous run.

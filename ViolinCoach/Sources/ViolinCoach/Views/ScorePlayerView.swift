@@ -35,15 +35,16 @@ struct ScorePlayerView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
+                // Greedy: the score takes whatever height is left above the
+                // transport and scrolls internally, so no Spacer here.
                 ScoreCanvasView(score: score, currentPlayableIndex: viewModel.currentPlayableIndex)
+                    .frame(maxHeight: .infinity)
 
                 ScoreProgressBar(
                     current: viewModel.currentPlayableIndex,
                     total: score.playableNotes.count
                 )
             }
-
-            Spacer()
 
             Button {
                 viewModel.togglePlayback()

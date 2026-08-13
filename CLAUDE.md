@@ -77,11 +77,27 @@ numbering.
 - **Hand-rolled MusicXML parser** (`Foundation.XMLParser`, SAX-style). Keeps
   VexFoundation as the only third-party dependency. MusicXML is just XML;
   staff engraving is the genuinely hard part worth a dependency.
-- **One `Stave` per measure, laid out left-to-right in a horizontal
-  ScrollView.** VexFoundation's `System` is for stacking *simultaneous*
-  staves (multi-instrument scores), not successive measures of one part.
-  A single scrolling line avoids implementing line-breaking, and suits
-  follow-along practice.
+- **One `Stave` per measure, wrapped into rows that scroll vertically.**
+  VexFoundation's `System` is for stacking *simultaneous* staves
+  (multi-instrument scores), not successive measures of one part, so
+  `ScoreRenderer` does its own row packing: it fits as many measures per row
+  as `minMeasureWidth` allows, then justifies them to end flush. Every row
+  repeats the clef and key signature (only row 0 gets the time signature),
+  as printed music does.
+- **A stave is 13 line-spacings tall, not 5.** VexFoundation reserves
+  `spaceAboveStaffLn` (4) above the top line and `spaceBelowStaffLn` (4)
+  below the bottom one, so its full extent from its own y origin is
+  `4 + 5 + 4` spacings — see `Stave.getBottomY()`. `ScoreRenderer.staveExtentInSpaces`
+  encodes this. Sizing a canvas by the five staff lines alone silently crops
+  the clef and every stem, which is exactly the bug it was written to fix.
+- **Audio engines never touch the main thread.** `AVAudioSession.setActive`,
+  `AVAudioEngine.prepare()`/`.start()`/`.stop()` are synchronous CoreAudio
+  calls that block for hundreds of milliseconds. `PitchDetector` and
+  `ScoreAudioPlayer` each keep their engine in a `nonisolated`
+  `@unchecked Sendable` box touched only on a private serial queue, and flip
+  their `@Published` state on the main actor *first* so buttons respond on
+  tap rather than after teardown. Pitch analysis gets its own queue on top of
+  that, with drop-if-busy backpressure — never queue audio work you can drop.
 - **XcodeGen `project.yml` instead of a checked-in `.xcodeproj`.** A pbxproj
   is a large generated format meant for Xcode's GUI to edit — hand-editing or
   agent-editing it invites corruption. YAML is diffable and regenerates

@@ -10,8 +10,10 @@ import VexFoundation
 public struct RenderedNotePosition {
     public let playableIndex: Int
     public let x: Double
-    public let staveY: Double
-    public let staveHeight: Double
+    /// Y of the top staff line on the row this note landed on.
+    public let staffTopY: Double
+    /// Y of the bottom staff line on that row.
+    public let staffBottomY: Double
 }
 
 public struct ScoreLayout {
@@ -44,50 +46,111 @@ public enum ScoreRenderer {
         -1: "F", -2: "Bb", -3: "Eb", -4: "Ab", -5: "Db", -6: "Gb", -7: "Cb",
     ]
 
+    /// A stave occupies `spaceAboveStaffLn` (4) + `numLines` (5) +
+    /// `spaceBelowStaffLn` (4) line-spacings vertically, so its full extent
+    /// from its own y origin is 13 spacings — this matches VexFoundation's
+    /// `Stave.getBottomY()`. Sizing a canvas by the 5 staff lines alone
+    /// silently crops the clef, the ledger lines and every stem, which is
+    /// exactly what happened before this constant existed.
+    static let staveExtentInSpaces: Double = 13
+
     public struct Metrics {
+        /// Distance between staff lines. VexFlow's default is
+        /// `Tables.STAVE_LINE_DISTANCE` (10); a little more reads better on a
+        /// phone. Everything else scales off this, so raising it far above the
+        /// default makes the engraving enormous rather than merely larger.
         public var staveSpace: Double
-        public var measureWidth: Double
-        public var firstMeasureExtraWidth: Double
+        /// Measures are never drawn narrower than this; it decides how many
+        /// fit on a row before wrapping.
+        public var minMeasureWidth: Double
+        /// Room reserved at the start of every row for the clef and key
+        /// signature, which repeat on each line the way printed music does.
+        public var rowPrefixWidth: Double
+        /// Extra room on the first row only, for the time signature.
+        public var firstRowExtraWidth: Double
         public var topMargin: Double
-        public var leftMargin: Double
+        public var horizontalMargin: Double
+        /// Blank space between wrapped rows.
+        public var rowGap: Double
 
         public init(
-            staveSpace: Double = 40,
-            measureWidth: Double = 170,
-            firstMeasureExtraWidth: Double = 100,
-            topMargin: Double = 20,
-            leftMargin: Double = 10
+            staveSpace: Double = 12,
+            // Chosen as the largest width that still fits two measures per row
+            // on a ~390pt phone (about 108pt each — comfortable for four
+            // quarter notes at this stave size). Larger drops it to one
+            // measure per line, which barely improves on not wrapping at all.
+            minMeasureWidth: Double = 100,
+            rowPrefixWidth: Double = 70,
+            firstRowExtraWidth: Double = 34,
+            topMargin: Double = 12,
+            horizontalMargin: Double = 12,
+            rowGap: Double = 16
         ) {
             self.staveSpace = staveSpace
-            self.measureWidth = measureWidth
-            self.firstMeasureExtraWidth = firstMeasureExtraWidth
+            self.minMeasureWidth = minMeasureWidth
+            self.rowPrefixWidth = rowPrefixWidth
+            self.firstRowExtraWidth = firstRowExtraWidth
             self.topMargin = topMargin
-            self.leftMargin = leftMargin
+            self.horizontalMargin = horizontalMargin
+            self.rowGap = rowGap
         }
+
+        /// Full vertical extent of one engraved row, excluding the gap.
+        var rowHeight: Double { ScoreRenderer.staveExtentInSpaces * staveSpace }
     }
 
-    /// The pixel size `draw(score:into:metrics:)` will use for this score —
-    /// exposed separately so a view can size its `VexCanvas`/`ScrollView`
-    /// without needing a live `RenderContext` first.
-    public static func canvasSize(for score: Score, metrics: Metrics = Metrics()) -> (width: Double, height: Double) {
-        let measureCount = max(1, score.measures.count)
-        let width = metrics.leftMargin
-            + Double(measureCount) * metrics.measureWidth
-            + metrics.firstMeasureExtraWidth
-            + metrics.leftMargin
-        let height = metrics.topMargin * 2 + metrics.staveSpace * 5
-        return (width, height)
+    /// How measures pack onto rows for a given canvas width. Computed the same
+    /// way by `canvasSize` and `draw` so the height reserved and the height
+    /// actually drawn can't disagree.
+    struct RowPlan {
+        let measuresPerRow: Int
+        let rowCount: Int
+        let contentWidth: Double
+    }
+
+    static func rowPlan(measureCount: Int, availableWidth: Double, metrics: Metrics) -> RowPlan {
+        let contentWidth = max(metrics.minMeasureWidth, availableWidth - metrics.horizontalMargin * 2)
+        // The first row is the tightest, since it also carries the time
+        // signature. Packing to that width keeps every row the same shape.
+        let usable = contentWidth - metrics.rowPrefixWidth - metrics.firstRowExtraWidth
+        let perRow = max(1, Int(usable / metrics.minMeasureWidth))
+        let count = max(1, Int(ceil(Double(max(1, measureCount)) / Double(perRow))))
+        return RowPlan(measuresPerRow: perRow, rowCount: count, contentWidth: contentWidth)
+    }
+
+    /// The pixel size `draw` will use for this score at a given width —
+    /// exposed separately so a view can size its `VexCanvas` and scroll
+    /// content without needing a live `RenderContext` first.
+    public static func canvasSize(
+        for score: Score,
+        availableWidth: Double,
+        metrics: Metrics = Metrics()
+    ) -> (width: Double, height: Double) {
+        let plan = rowPlan(
+            measureCount: score.measures.count,
+            availableWidth: availableWidth,
+            metrics: metrics
+        )
+        let height = metrics.topMargin * 2
+            + Double(plan.rowCount) * metrics.rowHeight
+            + Double(max(0, plan.rowCount - 1)) * metrics.rowGap
+        return (max(availableWidth, plan.contentWidth), height)
     }
 
     /// Draws `score` into `context` and returns the resulting layout. Call
     /// this from inside a `VexCanvas` draw closure.
     @discardableResult
-    public static func draw(score: Score, into context: RenderContext, metrics: Metrics = Metrics()) -> ScoreLayout {
+    public static func draw(
+        score: Score,
+        into context: RenderContext,
+        availableWidth: Double,
+        metrics: Metrics = Metrics()
+    ) -> ScoreLayout {
         FontLoader.loadDefaultFonts()
 
         let measures = score.measures
-        let size = canvasSize(for: score, metrics: metrics)
-        let totalHeight = size.height
+        let plan = rowPlan(measureCount: measures.count, availableWidth: availableWidth, metrics: metrics)
+        let size = canvasSize(for: score, availableWidth: availableWidth, metrics: metrics)
 
         let factory = Factory(options: FactoryOptions(staveSpace: metrics.staveSpace, width: size.width, height: size.height))
         _ = factory.setContext(context)
@@ -95,17 +158,41 @@ public enum ScoreRenderer {
         let keyName = keyNames[score.fifths] ?? "C"
         var positions: [RenderedNotePosition] = []
         var playableIndex = 0
-        var x = metrics.leftMargin
 
         for (measureIndex, measure) in measures.enumerated() {
-            let isFirst = measureIndex == 0
-            let width = metrics.measureWidth + (isFirst ? metrics.firstMeasureExtraWidth : 0)
-            let stave = factory.Stave(x: x, y: metrics.topMargin, width: width)
+            let row = measureIndex / plan.measuresPerRow
+            let column = measureIndex % plan.measuresPerRow
+            let isRowStart = column == 0
+            let isFirstRow = row == 0
 
-            if isFirst {
+            // Every row repeats the clef and key signature, as printed music
+            // does — a wrapped line has to be readable on its own. Only the
+            // first row carries the time signature, so only it needs the
+            // extra room.
+            let rowPrefix = metrics.rowPrefixWidth + (isFirstRow ? metrics.firstRowExtraWidth : 0)
+            // Measures share what's left of the row evenly, so a full row
+            // finishes flush at the right margin instead of ending ragged.
+            let measureWidth = (plan.contentWidth - rowPrefix) / Double(plan.measuresPerRow)
+
+            // The row's first stave is widened by the prefix and starts at the
+            // margin; the rest begin after it.
+            let x = metrics.horizontalMargin
+                + (isRowStart ? 0 : rowPrefix)
+                + Double(column) * measureWidth
+            let y = metrics.topMargin + Double(row) * (metrics.rowHeight + metrics.rowGap)
+
+            let stave = factory.Stave(
+                x: x,
+                y: y,
+                width: measureWidth + (isRowStart ? rowPrefix : 0)
+            )
+
+            if isRowStart {
                 _ = stave.addClef(.treble)
                 _ = stave.addKeySignature(keyName)
-                _ = stave.addTimeSignature(.meter(score.beatsPerMeasure, score.beatType))
+                if isFirstRow {
+                    _ = stave.addTimeSignature(.meter(score.beatsPerMeasure, score.beatType))
+                }
             }
 
             var staveNotes: [StaveNote] = []
@@ -149,22 +236,27 @@ public enum ScoreRenderer {
             let formatter = factory.Formatter()
             _ = formatter.formatToStave([voice], stave: stave)
 
+            // Bracket the cursor to the staff lines themselves rather than the
+            // stave's full box, which includes four line-spacings of headroom
+            // above the top line and would draw a cursor floating well clear
+            // of the notes.
+            let staffTop = stave.getYForLine(0)
+            let staffBottom = stave.getYForLine(4)
+
             for (i, staveNote) in staveNotes.enumerated() {
                 guard let pIndex = staveNotePlayableIndex[i] else { continue }
                 positions.append(RenderedNotePosition(
                     playableIndex: pIndex,
                     x: staveNote.getAbsoluteX(),
-                    staveY: stave.getY(),
-                    staveHeight: stave.getHeight()
+                    staffTopY: staffTop,
+                    staffBottomY: staffBottom
                 ))
             }
-
-            x += width
         }
 
         try? factory.draw()
 
-        return ScoreLayout(totalWidth: x + metrics.leftMargin, totalHeight: totalHeight, notePositions: positions)
+        return ScoreLayout(totalWidth: size.width, totalHeight: size.height, notePositions: positions)
     }
 
     // MARK: - MusicXML -> VexFoundation mapping
