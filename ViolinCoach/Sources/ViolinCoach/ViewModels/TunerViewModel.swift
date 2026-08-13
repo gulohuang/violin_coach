@@ -60,8 +60,65 @@ public final class TunerViewModel: ObservableObject {
         return String(format: "%.1f Hz", frequency)
     }
 
+    // MARK: - Reference string
+
+    /// One of the four open violin strings, for locking the tuner to a
+    /// specific target instead of chromatic auto-detection.
+    public struct OpenString: Identifiable, Equatable, Sendable {
+        public let name: String
+        public let midi: Int
+        public var id: Int { midi }
+    }
+
+    public static let openStrings: [OpenString] = [
+        OpenString(name: "G", midi: 55),
+        OpenString(name: "D", midi: 62),
+        OpenString(name: "A", midi: 69),
+        OpenString(name: "E", midi: 76),
+    ]
+
+    /// The string being tuned, or nil for chromatic auto-detect (the default).
+    @Published public private(set) var targetMIDI: Int?
+
+    /// Tapping the selected string again clears it and returns to auto-detect.
+    public func selectString(midi: Int) {
+        targetMIDI = (targetMIDI == midi) ? nil : midi
+    }
+
+    public var targetFrequency: Double? {
+        targetMIDI.map { PitchMath.midiToFrequency($0, a4: detector.a4Reference) }
+    }
+
+    public var targetLabel: String? {
+        guard let targetMIDI, let targetFrequency else { return nil }
+        let label = PitchMath.frequencyToNote(
+            PitchMath.midiToFrequency(targetMIDI, a4: detector.a4Reference),
+            a4: detector.a4Reference
+        ).label
+        return String(format: "Tuning to %@ · %.1f Hz", label, targetFrequency)
+    }
+
+    /// Nearest open string to what's sounding, within three semitones — a hint
+    /// in auto mode, so the row still orients you when nothing is locked.
+    public var nearestStringMIDI: Int? {
+        guard let detected = detectedMIDI else { return nil }
+        let nearest = Self.openStrings.min {
+            abs($0.midi - detected) < abs($1.midi - detected)
+        }
+        guard let nearest, abs(nearest.midi - detected) <= 3 else { return nil }
+        return nearest.midi
+    }
+
+    // MARK: - Readings
+
+    /// Deviation in cents. Measured against the locked string when there is
+    /// one, so a badly flat A reads as a very flat A rather than snapping to a
+    /// nearly in-tune G#; otherwise against the nearest chromatic note.
     public var cents: Int {
-        detector.note?.cents ?? 0
+        guard let targetFrequency, let frequency = detector.frequency else {
+            return detector.note?.cents ?? 0
+        }
+        return Int(PitchMath.cents(from: frequency, to: targetFrequency).rounded())
     }
 
     public var hasSignal: Bool {

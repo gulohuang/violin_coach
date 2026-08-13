@@ -103,4 +103,16 @@ public enum PitchMath {
     public static func midiToFrequency(_ midi: Int, a4: Double = 440) -> Double {
         a4 * pow(2, Double(midi - 69) / 12)
     }
+
+    /// Interval between two frequencies in cents (1200 per octave).
+    /// Negative = `frequency` is below `reference`, i.e. flat.
+    ///
+    /// Distinct from `frequencyToNote(_:).cents`, which measures against the
+    /// *nearest* chromatic note. Use this when there's a specific target —
+    /// the note being practised, or the string being tuned — because a badly
+    /// flat A should read as a very flat A, not as a nearly in-tune G#.
+    public static func cents(from frequency: Double, to reference: Double) -> Double {
+        guard frequency > 0, reference > 0 else { return 0 }
+        return 1200 * log2(frequency / reference)
+    }
 }

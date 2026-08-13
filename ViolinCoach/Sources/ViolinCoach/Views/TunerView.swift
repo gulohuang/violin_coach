@@ -1,9 +1,8 @@
 import SwiftUI
 
 /// Tab 1: a chromatic tuner. An arc gauge shows how many cents sharp or flat
-/// the detected pitch is, the detected note sits in the middle of it, and a
-/// row of the four open violin strings highlights whichever one you're
-/// nearest to.
+/// the pitch is, and the four open strings can be tapped to lock the gauge to
+/// one of them instead of auto-detecting the nearest chromatic note.
 struct TunerView: View {
     @StateObject private var viewModel = TunerViewModel()
 
@@ -11,6 +10,11 @@ struct TunerView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: Theme.Spacing.lg) {
+                    Text(viewModel.targetLabel ?? "Chromatic · nearest note")
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(viewModel.targetLabel == nil ? .secondary : Theme.Palette.accent)
+                        .animation(Theme.Motion.gentle, value: viewModel.targetMIDI)
+
                     TunerGauge(
                         cents: viewModel.cents,
                         hasSignal: viewModel.hasSignal,
@@ -18,9 +22,13 @@ struct TunerView: View {
                         noteLabel: viewModel.noteLabel,
                         frequencyLabel: viewModel.frequencyLabel
                     )
-                    .padding(.top, Theme.Spacing.md)
 
-                    OpenStringRow(detectedMIDI: viewModel.detectedMIDI)
+                    OpenStringRow(
+                        strings: TunerViewModel.openStrings,
+                        selectedMIDI: viewModel.targetMIDI,
+                        nearestMIDI: viewModel.nearestStringMIDI,
+                        onSelect: { viewModel.selectString(midi: $0) }
+                    )
 
                     referenceCard
 
@@ -37,6 +45,7 @@ struct TunerView: View {
                     ))
                 }
                 .padding(.horizontal, Theme.Spacing.lg)
+                .padding(.top, Theme.Spacing.sm)
                 .padding(.bottom, Theme.Spacing.xl)
             }
             .background(Theme.Palette.background.ignoresSafeArea())
@@ -84,9 +93,18 @@ private struct TunerGauge: View {
     /// and where a perfectly in-tune note reads.
     private let startAngle: Double = 150
     private let sweep: Double = 240
-    private let displayRange: Double = 50 // cents at each end of the arc
+    /// Cents at each end of the arc. Readings beyond this peg the indicator at
+    /// the end while the numeric readout keeps showing the true value — the
+    /// arc stays at a useful fine-tuning resolution without misreporting how
+    /// far off a badly out-of-tune string actually is.
+    private let displayRange: Double = 50
 
-    /// Cents mapped onto 0...1 along the arc. Values beyond ±50 clamp to the ends.
+    /// Height is set explicitly rather than derived from an aspect ratio. This
+    /// view sits in a vertical ScrollView, which proposes a nil height; a
+    /// GeometryReader has no ideal size of its own, so an aspect-ratio fit
+    /// collapses to zero and the whole gauge silently disappears.
+    private let gaugeHeight: CGFloat = 260
+
     private var progress: Double {
         let clamped = max(-displayRange, min(displayRange, Double(cents)))
         return (clamped + displayRange) / (displayRange * 2)
@@ -136,11 +154,11 @@ private struct TunerGauge: View {
                 }
 
                 readout
-                    .position(x: geo.size.width / 2, y: side * 0.52)
+                    .position(x: geo.size.width / 2, y: side * 0.54)
             }
             .frame(width: geo.size.width, height: side)
         }
-        .aspectRatio(1.15, contentMode: .fit)
+        .frame(height: gaugeHeight)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityDescription)
     }
@@ -148,21 +166,20 @@ private struct TunerGauge: View {
     private var readout: some View {
         VStack(spacing: Theme.Spacing.xs) {
             Text(hasSignal ? noteLabel : "—")
-                .font(.system(size: 68, weight: .bold, design: .rounded))
+                .font(.system(size: 60, weight: .bold, design: .rounded))
                 .foregroundStyle(hasSignal ? (isInTune ? Theme.Palette.inTune : Color.primary) : .secondary)
                 .animation(Theme.Motion.gentle, value: noteLabel)
 
+            // Frequency is always on screen — it's the raw measurement, and
+            // useful even when no clear note is being tracked.
+            Text(frequencyLabel.isEmpty ? "— Hz" : frequencyLabel)
+                .font(.subheadline.monospacedDigit())
+                .foregroundStyle(.secondary)
+
             if hasSignal {
                 Text(centsLabel)
-                    .font(.headline.monospacedDigit())
+                    .font(.footnote.weight(.semibold).monospacedDigit())
                     .foregroundStyle(indicatorColor)
-                Text(frequencyLabel)
-                    .font(.footnote.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            } else {
-                Text("Play a note")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -174,8 +191,8 @@ private struct TunerGauge: View {
 
     private var accessibilityDescription: String {
         guard hasSignal else { return "Tuner. No pitch detected." }
-        if isInTune { return "\(noteLabel), in tune." }
-        return "\(noteLabel), \(abs(cents)) cents \(cents > 0 ? "sharp" : "flat")."
+        if isInTune { return "\(noteLabel), in tune, \(frequencyLabel)." }
+        return "\(noteLabel), \(abs(cents)) cents \(cents > 0 ? "sharp" : "flat"), \(frequencyLabel)."
     }
 
     private func tickMarks(center: CGPoint, radius: CGFloat, lineWidth: CGFloat) -> some View {
@@ -228,8 +245,6 @@ private struct ArcShape: Shape {
     func path(in rect: CGRect) -> Path {
         let side = min(rect.width, rect.height)
         let center = CGPoint(x: rect.midX, y: side / 2)
-        // Insets by half the eventual stroke width are handled by the caller
-        // sizing the frame; use the full radius here.
         let radius = side / 2
         var path = Path()
         path.addArc(
@@ -245,39 +260,43 @@ private struct ArcShape: Shape {
 
 // MARK: - Open strings
 
-/// The four open violin strings, highlighting whichever is closest to the
-/// detected pitch — quick orientation while tuning string by string.
+/// The four open violin strings as buttons. Tapping one locks the gauge to
+/// that pitch; tapping it again returns to chromatic auto-detect. In auto
+/// mode the string nearest the detected pitch is hinted, so the row still
+/// orients you without a selection.
 private struct OpenStringRow: View {
-    let detectedMIDI: Int?
-
-    private static let strings: [(name: String, midi: Int)] = [
-        ("G", 55), ("D", 62), ("A", 69), ("E", 76),
-    ]
-
-    /// Nearest open string, but only when the pitch is within three semitones
-    /// of one — otherwise nothing is highlighted rather than guessing.
-    private var nearestMIDI: Int? {
-        guard let detectedMIDI else { return nil }
-        let nearest = Self.strings.min { abs($0.midi - detectedMIDI) < abs($1.midi - detectedMIDI) }
-        guard let nearest, abs(nearest.midi - detectedMIDI) <= 3 else { return nil }
-        return nearest.midi
-    }
+    let strings: [TunerViewModel.OpenString]
+    let selectedMIDI: Int?
+    let nearestMIDI: Int?
+    let onSelect: (Int) -> Void
 
     var body: some View {
         HStack(spacing: Theme.Spacing.sm) {
-            ForEach(Self.strings, id: \.midi) { string in
-                let isActive = string.midi == nearestMIDI
-                Text(string.name)
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(isActive ? Color.white : .secondary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, Theme.Spacing.sm)
-                    .background(
-                        RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
-                            .fill(isActive ? Theme.Palette.accent : Theme.Palette.cardSurface)
-                    )
-                    .animation(Theme.Motion.gentle, value: isActive)
-                    .accessibilityLabel("\(string.name) string\(isActive ? ", nearest" : "")")
+            ForEach(strings) { string in
+                let isSelected = string.midi == selectedMIDI
+                let isNearest = selectedMIDI == nil && string.midi == nearestMIDI
+
+                Button {
+                    onSelect(string.midi)
+                } label: {
+                    Text(string.name)
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(isSelected ? Color.white : (isNearest ? Theme.Palette.accent : .secondary))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, Theme.Spacing.sm)
+                        .background(
+                            RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                                .fill(isSelected ? Theme.Palette.accent : Theme.Palette.cardSurface)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                                .strokeBorder(Theme.Palette.accent, lineWidth: isNearest ? 1.5 : 0)
+                        )
+                }
+                .buttonStyle(.plain)
+                .animation(Theme.Motion.gentle, value: isSelected)
+                .accessibilityLabel("\(string.name) string")
+                .accessibilityHint(isSelected ? "Selected. Tap to return to chromatic tuning." : "Tap to tune to this string.")
             }
         }
     }

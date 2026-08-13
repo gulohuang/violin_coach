@@ -67,6 +67,38 @@ final class PitchMathTests: XCTestCase {
         XCTAssertEqual(match.label, "A4")
     }
 
+    // MARK: - cents(from:to:)
+
+    func testCentsIsZeroAtTheReference() {
+        XCTAssertEqual(PitchMath.cents(from: 440, to: 440), 0, accuracy: 0.0001)
+    }
+
+    func testOneOctaveIs1200Cents() {
+        XCTAssertEqual(PitchMath.cents(from: 880, to: 440), 1200, accuracy: 0.0001)
+        XCTAssertEqual(PitchMath.cents(from: 220, to: 440), -1200, accuracy: 0.0001)
+    }
+
+    func testCentsSignsFollowDirection() {
+        XCTAssertGreaterThan(PitchMath.cents(from: 445, to: 440), 0) // sharp
+        XCTAssertLessThan(PitchMath.cents(from: 435, to: 440), 0)    // flat
+    }
+
+    /// The distinction that motivates this helper: measured against a specific
+    /// target, a very flat A stays a very flat A instead of collapsing to a
+    /// nearly in-tune G# the way nearest-note matching would report it.
+    func testFlatNoteMeasuresFarFromItsTargetNotNearItsNeighbour() {
+        let a4 = PitchMath.midiToFrequency(69)
+        let veryFlatA = a4 * pow(2, -80.0 / 1200) // 80 cents flat
+        XCTAssertEqual(PitchMath.cents(from: veryFlatA, to: a4), -80, accuracy: 0.01)
+        // Nearest-note matching would call the same pitch a near-in-tune G#.
+        XCTAssertEqual(PitchMath.frequencyToNote(veryFlatA).name, "G#")
+    }
+
+    func testCentsHandlesNonPositiveInputSafely() {
+        XCTAssertEqual(PitchMath.cents(from: 0, to: 440), 0)
+        XCTAssertEqual(PitchMath.cents(from: 440, to: 0), 0)
+    }
+
     func testLabelsViolinOpenStringsCorrectly() {
         XCTAssertEqual(PitchMath.frequencyToNote(196.0).label, "G3")
         XCTAssertEqual(PitchMath.frequencyToNote(293.66).label, "D4")

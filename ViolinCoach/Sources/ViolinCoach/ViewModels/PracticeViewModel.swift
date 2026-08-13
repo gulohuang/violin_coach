@@ -90,7 +90,7 @@ public final class PracticeViewModel: ObservableObject {
         }
 
         let targetFrequency = PitchMath.midiToFrequency(expected.midi, a4: detector.a4Reference)
-        let cents = 1200 * log2(frequency / targetFrequency)
+        let cents = PitchMath.cents(from: frequency, to: targetFrequency)
 
         if cents > centsTolerance {
             direction = .tooHigh
