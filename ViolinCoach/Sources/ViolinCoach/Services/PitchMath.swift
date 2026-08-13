@@ -17,12 +17,21 @@ public enum PitchMath {
     /// throws off naive spectral peak detection; autocorrelation finds the
     /// lag that best repeats the whole waveform, tracking the true
     /// fundamental more reliably for sustained monophonic tones.
-    public static func autoCorrelate(_ buffer: [Float], sampleRate: Double) -> Double? {
-        let n = buffer.count
+    ///
+    /// `maxWindow` caps how many samples are analyzed. Autocorrelation is
+    /// O(window x lags), so this is the cheapest lever on its cost. Passing
+    /// nil (the default) analyzes everything, which is what the tests do;
+    /// `PitchDetector` caps it, because the extra samples buy no accuracy —
+    /// the lowest pitch tracked here (150Hz) has a 320-sample period at
+    /// 48kHz, so ~2048 samples already covers six full cycles.
+    public static func autoCorrelate(_ buffer: [Float], sampleRate: Double, maxWindow: Int? = nil) -> Double? {
+        let n = min(buffer.count, maxWindow ?? buffer.count)
         guard n > 0 else { return nil }
 
+        // Only the first `n` samples — the analysis window — take part, so the
+        // sum and the divisor stay consistent when maxWindow trims the buffer.
         var rms: Double = 0
-        for sample in buffer { rms += Double(sample) * Double(sample) }
+        for i in 0..<n { rms += Double(buffer[i]) * Double(buffer[i]) }
         rms = (rms / Double(n)).squareRoot()
         guard rms >= 0.01 else { return nil }
 
