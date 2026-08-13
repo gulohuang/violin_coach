@@ -20,7 +20,7 @@ struct ScorePlayerView: View {
             .background(Theme.Palette.background.ignoresSafeArea())
             .navigationTitle("Score Player")
         }
-        .onDisappear { viewModel.player.stop() }
+        .onDisappear { viewModel.stop() }
     }
 
     private func loaded(score: Score) -> some View {
@@ -48,11 +48,11 @@ struct ScorePlayerView: View {
             Button {
                 viewModel.togglePlayback()
             } label: {
-                Image(systemName: viewModel.player.isPlaying ? "stop.fill" : "play.fill")
-                    .accessibilityLabel(viewModel.player.isPlaying ? "Stop" : "Play")
+                Image(systemName: viewModel.isPlaying ? "stop.fill" : "play.fill")
+                    .accessibilityLabel(viewModel.isPlaying ? "Stop" : "Play")
             }
             .buttonStyle(CircularTransportButtonStyle(
-                tint: viewModel.player.isPlaying ? Theme.Palette.stop : Theme.Palette.accent
+                tint: viewModel.isPlaying ? Theme.Palette.stop : Theme.Palette.accent
             ))
             .padding(.bottom, Theme.Spacing.lg)
         }

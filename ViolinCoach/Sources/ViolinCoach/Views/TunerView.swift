@@ -20,7 +20,7 @@ struct TunerView: View {
                     )
                     .padding(.top, Theme.Spacing.md)
 
-                    OpenStringRow(detectedMIDI: viewModel.detector.note?.midi)
+                    OpenStringRow(detectedMIDI: viewModel.detectedMIDI)
 
                     referenceCard
 
@@ -28,12 +28,12 @@ struct TunerView: View {
                         viewModel.toggleListening()
                     } label: {
                         Label(
-                            viewModel.detector.isListening ? "Stop" : "Start Tuner",
-                            systemImage: viewModel.detector.isListening ? "mic.slash.fill" : "mic.fill"
+                            viewModel.isListening ? "Stop" : "Start Tuner",
+                            systemImage: viewModel.isListening ? "mic.slash.fill" : "mic.fill"
                         )
                     }
                     .buttonStyle(PrimaryActionButtonStyle(
-                        tint: viewModel.detector.isListening ? Theme.Palette.stop : Theme.Palette.accent
+                        tint: viewModel.isListening ? Theme.Palette.stop : Theme.Palette.accent
                     ))
                 }
                 .padding(.horizontal, Theme.Spacing.lg)
@@ -42,7 +42,7 @@ struct TunerView: View {
             .background(Theme.Palette.background.ignoresSafeArea())
             .navigationTitle("Tuner")
         }
-        .onDisappear { viewModel.detector.stop() }
+        .onDisappear { viewModel.stop() }
     }
 
     private var referenceCard: some View {
@@ -50,14 +50,14 @@ struct TunerView: View {
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                 Text("Reference pitch")
                     .font(.subheadline.weight(.medium))
-                Text("A4 = \(Int(viewModel.detector.a4Reference)) Hz")
+                Text("A4 = \(Int(viewModel.a4Reference)) Hz")
                     .font(.footnote.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
             Spacer()
             Stepper(
                 "",
-                value: $viewModel.detector.a4Reference,
+                value: $viewModel.a4Reference,
                 in: 415...466,
                 step: 1
             )

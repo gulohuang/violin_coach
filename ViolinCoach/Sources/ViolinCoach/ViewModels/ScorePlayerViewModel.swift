@@ -13,9 +13,25 @@ public final class ScorePlayerViewModel: ObservableObject {
     public let player: ScoreAudioPlayer
     public var a4Reference: Double = 440
 
+    private var cancellables = Set<AnyCancellable>()
+
     public init(player: ScoreAudioPlayer = ScoreAudioPlayer()) {
         self.player = player
+        // See TunerViewModel: a nested ObservableObject's changes don't reach
+        // the object holding it, so without this relay the cursor would never
+        // advance and the play button would never flip to stop.
+        player.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
         load()
+    }
+
+    public var isPlaying: Bool {
+        player.isPlaying
+    }
+
+    public func stop() {
+        player.stop()
     }
 
     public func load() {
