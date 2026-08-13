@@ -9,99 +9,143 @@ struct PracticeView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
+            Group {
                 if let score = viewModel.score {
-                    ScoreCanvasView(score: score, currentPlayableIndex: viewModel.currentIndex)
-                        .padding(.top, 16)
-
-                    Spacer()
-
-                    FeedbackBadge(
-                        isActive: viewModel.isActive,
-                        isComplete: viewModel.isComplete,
-                        direction: viewModel.direction,
-                        expectedNoteLabel: viewModel.expectedNoteLabel
-                    )
-                    .padding(.horizontal, 32)
-
-                    Spacer()
-
-                    Button {
-                        if viewModel.isActive {
-                            viewModel.stop()
-                        } else {
-                            viewModel.start()
-                        }
-                    } label: {
-                        Label(
-                            viewModel.isActive ? "Stop" : (viewModel.isComplete ? "Practice Again" : "Start Practice"),
-                            systemImage: viewModel.isActive ? "mic.slash.fill" : "mic.fill"
-                        )
-                        .font(.title2.bold())
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(viewModel.isActive ? .red : .accentColor)
-                    .padding(.horizontal, 32)
-                    .padding(.bottom, 24)
+                    loaded(score: score)
                 } else if let error = viewModel.loadError {
-                    Spacer()
                     ScoreUnavailableView(title: "Couldn't load score", message: error)
-                    Spacer()
                 } else {
-                    Spacer()
                     ProgressView()
-                    Spacer()
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Theme.Palette.background.ignoresSafeArea())
             .navigationTitle("Practice")
         }
         .onDisappear { viewModel.stop() }
     }
+
+    private func loaded(score: Score) -> some View {
+        VStack(spacing: Theme.Spacing.lg) {
+            VStack(spacing: Theme.Spacing.sm) {
+                ScoreCanvasView(score: score, currentPlayableIndex: viewModel.currentIndex)
+                ScoreProgressBar(
+                    current: viewModel.currentIndex,
+                    total: score.playableNotes.count
+                )
+            }
+
+            Spacer(minLength: Theme.Spacing.md)
+
+            FeedbackCard(
+                isActive: viewModel.isActive,
+                isComplete: viewModel.isComplete,
+                direction: viewModel.direction,
+                expectedNoteLabel: viewModel.expectedNoteLabel
+            )
+
+            Spacer(minLength: Theme.Spacing.md)
+
+            Button {
+                if viewModel.isActive {
+                    viewModel.stop()
+                } else {
+                    viewModel.start()
+                }
+            } label: {
+                Label(
+                    viewModel.isActive ? "Stop" : (viewModel.isComplete ? "Practice Again" : "Start Practice"),
+                    systemImage: viewModel.isActive ? "mic.slash.fill" : "mic.fill"
+                )
+            }
+            .buttonStyle(PrimaryActionButtonStyle(
+                tint: viewModel.isActive ? Theme.Palette.stop : Theme.Palette.accent
+            ))
+            .padding(.bottom, Theme.Spacing.lg)
+        }
+        .padding(.horizontal, Theme.Spacing.lg)
+        .padding(.top, Theme.Spacing.md)
+    }
 }
 
-private struct FeedbackBadge: View {
+/// Live pitch feedback. Direction is carried by an arrow, a word, *and*
+/// position — never by color alone, so the red/green signal at the heart of
+/// this screen still works for colorblind players.
+private struct FeedbackCard: View {
     let isActive: Bool
     let isComplete: Bool
     let direction: PitchDirection?
     let expectedNoteLabel: String
 
-    var body: some View {
-        VStack(spacing: 12) {
-            if isComplete {
-                Label("Piece complete!", systemImage: "checkmark.seal.fill")
-                    .font(.title2.bold())
-                    .foregroundStyle(.green)
-            } else if isActive {
-                Text("Play \(expectedNoteLabel)")
-                    .font(.title.bold())
+    private var accent: Color {
+        switch direction {
+        case .inTune: return Theme.Palette.inTune
+        case .tooHigh, .tooLow: return Theme.Palette.outOfTune
+        case nil: return Theme.Palette.idle
+        }
+    }
 
-                Group {
-                    switch direction {
-                    case .tooHigh:
-                        Label("Too high", systemImage: "arrow.up")
-                            .foregroundStyle(.orange)
-                    case .tooLow:
-                        Label("Too low", systemImage: "arrow.down")
-                            .foregroundStyle(.orange)
-                    case .inTune:
-                        Label("In tune", systemImage: "checkmark")
-                            .foregroundStyle(.green)
-                    case nil:
-                        Label("Listening…", systemImage: "waveform")
-                            .foregroundStyle(.secondary)
-                    }
+    var body: some View {
+        VStack(spacing: Theme.Spacing.md) {
+            if isComplete {
+                Image(systemName: "checkmark.seal.fill")
+                    .font(.system(size: 44))
+                    .foregroundStyle(Theme.Palette.inTune)
+                Text("Piece complete")
+                    .font(.title3.weight(.semibold))
+            } else if isActive {
+                VStack(spacing: Theme.Spacing.xs) {
+                    Text("Play")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Text(expectedNoteLabel)
+                        .font(.system(size: 54, weight: .bold, design: .rounded))
+                        .animation(Theme.Motion.gentle, value: expectedNoteLabel)
                 }
-                .font(.title3.bold())
-                .animation(.spring(response: 0.3, dampingFraction: 0.75), value: direction)
+
+                HStack(spacing: Theme.Spacing.sm) {
+                    Image(systemName: symbolName)
+                        .font(.title3.weight(.bold))
+                    Text(statusText)
+                        .font(.headline)
+                }
+                .foregroundStyle(accent)
+                .padding(.horizontal, Theme.Spacing.md)
+                .padding(.vertical, Theme.Spacing.sm)
+                .background(
+                    Capsule().fill(accent.opacity(0.12))
+                )
+                .animation(Theme.Motion.gentle, value: direction)
             } else {
+                Image(systemName: "waveform")
+                    .font(.system(size: 36))
+                    .foregroundStyle(.secondary)
                 Text("Tap Start Practice to begin")
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
         }
         .frame(maxWidth: .infinity)
-        .padding()
+        .card(padding: Theme.Spacing.lg)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var symbolName: String {
+        switch direction {
+        case .tooHigh: return "arrow.down"   // play *lower* to correct a sharp note
+        case .tooLow: return "arrow.up"
+        case .inTune: return "checkmark.circle.fill"
+        case nil: return "waveform"
+        }
+    }
+
+    private var statusText: String {
+        switch direction {
+        case .tooHigh: return "Too high"
+        case .tooLow: return "Too low"
+        case .inTune: return "In tune"
+        case nil: return "Listening…"
+        }
     }
 }
 

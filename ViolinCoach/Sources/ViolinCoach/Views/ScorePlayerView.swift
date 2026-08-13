@@ -7,45 +7,92 @@ struct ScorePlayerView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
+            Group {
                 if let score = viewModel.score {
-                    ScoreCanvasView(score: score, currentPlayableIndex: viewModel.currentPlayableIndex)
-                        .padding(.top, 16)
-
-                    Text(score.title)
-                        .font(.headline)
-                        .padding(.top, 8)
-
-                    Spacer()
-
-                    Button {
-                        viewModel.togglePlayback()
-                    } label: {
-                        Label(
-                            viewModel.player.isPlaying ? "Stop" : "Play",
-                            systemImage: viewModel.player.isPlaying ? "stop.fill" : "play.fill"
-                        )
-                        .font(.title2.bold())
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(viewModel.player.isPlaying ? .red : .accentColor)
-                    .padding(.horizontal, 32)
-                    .padding(.bottom, 24)
+                    loaded(score: score)
                 } else if let error = viewModel.loadError {
-                    Spacer()
                     ScoreUnavailableView(title: "Couldn't load score", message: error)
-                    Spacer()
                 } else {
-                    Spacer()
                     ProgressView()
-                    Spacer()
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Theme.Palette.background.ignoresSafeArea())
             .navigationTitle("Score Player")
         }
         .onDisappear { viewModel.player.stop() }
+    }
+
+    private func loaded(score: Score) -> some View {
+        VStack(spacing: Theme.Spacing.lg) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                    Text(score.title)
+                        .font(.title3.weight(.semibold))
+                    Text("\(Int(score.tempoBPM)) BPM · \(score.beatsPerMeasure)/\(score.beatType) · \(score.playableNotes.count) notes")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                ScoreCanvasView(score: score, currentPlayableIndex: viewModel.currentPlayableIndex)
+
+                ScoreProgressBar(
+                    current: viewModel.currentPlayableIndex,
+                    total: score.playableNotes.count
+                )
+            }
+
+            Spacer()
+
+            Button {
+                viewModel.togglePlayback()
+            } label: {
+                Image(systemName: viewModel.player.isPlaying ? "stop.fill" : "play.fill")
+                    .accessibilityLabel(viewModel.player.isPlaying ? "Stop" : "Play")
+            }
+            .buttonStyle(CircularTransportButtonStyle(
+                tint: viewModel.player.isPlaying ? Theme.Palette.stop : Theme.Palette.accent
+            ))
+            .padding(.bottom, Theme.Spacing.lg)
+        }
+        .padding(.horizontal, Theme.Spacing.lg)
+        .padding(.top, Theme.Spacing.md)
+    }
+}
+
+/// A thin progress track shared by the player and practice tabs, driven by
+/// position within `Score.playableNotes`.
+struct ScoreProgressBar: View {
+    let current: Int
+    let total: Int
+
+    private var fraction: Double {
+        guard total > 0, current >= 0 else { return 0 }
+        return Double(current + 1) / Double(total)
+    }
+
+    var body: some View {
+        VStack(spacing: Theme.Spacing.xs) {
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Theme.Palette.idle.opacity(0.25))
+                    Capsule()
+                        .fill(Theme.Palette.accent)
+                        .frame(width: geo.size.width * fraction)
+                        .animation(Theme.Motion.gentle, value: fraction)
+                }
+            }
+            .frame(height: 5)
+
+            Text(current >= 0 ? "Note \(current + 1) of \(total)" : "\(total) notes")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(current >= 0 ? "Note \(current + 1) of \(total)" : "\(total) notes")
     }
 }
 
