@@ -19,7 +19,8 @@ struct TunerView: View {
                         cents: viewModel.cents,
                         hasSignal: viewModel.hasSignal,
                         isInTune: viewModel.isInTune,
-                        noteLabel: viewModel.noteLabel,
+                        referenceLabel: viewModel.referenceLabel,
+                        referenceFrequencyLabel: viewModel.referenceFrequencyLabel,
                         frequencyLabel: viewModel.frequencyLabel
                     )
 
@@ -109,13 +110,17 @@ struct TunerView: View {
 
 // MARK: - Gauge
 
-/// A 240° arc gauge. Cents map left-to-right across the arc, with 0 at the
-/// top; the detected note and frequency sit in the middle.
+/// A 240° arc gauge reading -50 to +50 cents left to right, with the
+/// reference pitch named in the middle and a needle pointing at the detected
+/// pitch: left of centre is flat, right is sharp, straight up is in tune.
 private struct TunerGauge: View {
     let cents: Int
     let hasSignal: Bool
     let isInTune: Bool
-    let noteLabel: String
+    /// The pitch being measured against — sits in the middle of the dial.
+    let referenceLabel: String
+    let referenceFrequencyLabel: String
+    /// Frequency actually detected, which the needle represents.
     let frequencyLabel: String
 
     /// The arc spans 240°, starting at 150° and sweeping clockwise to 30°.
@@ -175,17 +180,26 @@ private struct TunerGauge: View {
                 }
 
                 tickMarks(center: center, radius: radius, lineWidth: lineWidth)
+                scaleLabels(center: center, radius: radius, lineWidth: lineWidth)
 
+                // The needle. Starts outside the hub so it never runs across
+                // the reference pitch printed in the middle.
                 if hasSignal {
-                    Circle()
-                        .fill(indicatorColor)
-                        .frame(width: lineWidth * 1.35, height: lineWidth * 1.35)
-                        .position(pointOnArc(progress: progress, center: center, radius: radius))
-                        .animation(Theme.Motion.responsive, value: progress)
+                    NeedleShape(
+                        progress: progress,
+                        startAngle: startAngle,
+                        sweep: sweep,
+                        innerRatio: 0.52,
+                        outerRatio: 0.94
+                    )
+                    .stroke(style: StrokeStyle(lineWidth: max(3, lineWidth * 0.28), lineCap: .round))
+                    .foregroundStyle(indicatorColor)
+                    .padding(lineWidth / 2)
+                    .animation(Theme.Motion.responsive, value: progress)
                 }
 
                 readout
-                    .position(x: geo.size.width / 2, y: side * 0.54)
+                    .position(x: geo.size.width / 2, y: side * 0.56)
             }
             .frame(width: geo.size.width, height: side)
         }
@@ -195,17 +209,30 @@ private struct TunerGauge: View {
     }
 
     private var readout: some View {
-        VStack(spacing: Theme.Spacing.xs) {
-            Text(hasSignal ? noteLabel : "—")
-                .font(.system(size: 60, weight: .bold, design: .rounded))
-                .foregroundStyle(hasSignal ? (isInTune ? Theme.Palette.inTune : Color.primary) : .secondary)
-                .animation(Theme.Motion.gentle, value: noteLabel)
+        VStack(spacing: 2) {
+            Text("REFERENCE")
+                .font(.caption2.weight(.semibold))
+                .tracking(1.2)
+                .foregroundStyle(.tertiary)
 
-            // Frequency is always on screen — it's the raw measurement, and
-            // useful even when no clear note is being tracked.
+            // The reference pitch — what the needle is measured against.
+            Text(referenceLabel)
+                .font(.system(size: 52, weight: .bold, design: .rounded))
+                .foregroundStyle(hasSignal ? (isInTune ? Theme.Palette.inTune : Color.primary) : .secondary)
+                .animation(Theme.Motion.gentle, value: referenceLabel)
+
+            if !referenceFrequencyLabel.isEmpty {
+                Text(referenceFrequencyLabel)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+            }
+
+            // What the microphone actually picked up. Always on screen — it's
+            // the raw measurement, and useful even with no clear note.
             Text(frequencyLabel.isEmpty ? "— Hz" : frequencyLabel)
-                .font(.subheadline.monospacedDigit())
+                .font(.subheadline.weight(.medium).monospacedDigit())
                 .foregroundStyle(.secondary)
+                .padding(.top, 2)
 
             if hasSignal {
                 Text(centsLabel)
@@ -222,8 +249,8 @@ private struct TunerGauge: View {
 
     private var accessibilityDescription: String {
         guard hasSignal else { return "Tuner. No pitch detected." }
-        if isInTune { return "\(noteLabel), in tune, \(frequencyLabel)." }
-        return "\(noteLabel), \(abs(cents)) cents \(cents > 0 ? "sharp" : "flat"), \(frequencyLabel)."
+        if isInTune { return "Reference \(referenceLabel). In tune at \(frequencyLabel)." }
+        return "Reference \(referenceLabel). \(frequencyLabel), \(abs(cents)) cents \(cents > 0 ? "sharp" : "flat")."
     }
 
     private func tickMarks(center: CGPoint, radius: CGFloat, lineWidth: CGFloat) -> some View {
@@ -248,6 +275,24 @@ private struct TunerGauge: View {
         }
     }
 
+    /// -50 / 0 / +50 printed just inside the arc, so the span the needle
+    /// covers is readable rather than implied.
+    private func scaleLabels(center: CGPoint, radius: CGFloat, lineWidth: CGFloat) -> some View {
+        let entries: [(fraction: Double, text: String)] = [
+            (0, "-50"), (0.5, "0"), (1, "+50"),
+        ]
+        return ForEach(entries, id: \.text) { entry in
+            Text(entry.text)
+                .font(.caption2.weight(.medium).monospacedDigit())
+                .foregroundStyle(.tertiary)
+                .position(pointOnArc(
+                    progress: entry.fraction,
+                    center: center,
+                    radius: radius - lineWidth * 1.25
+                ))
+        }
+    }
+
     private func pointOnArc(progress: Double, center: CGPoint, radius: CGFloat) -> CGPoint {
         let degrees = startAngle + sweep * progress
         let radians = degrees * .pi / 180
@@ -255,6 +300,45 @@ private struct TunerGauge: View {
             x: center.x + radius * cos(radians),
             y: center.y + radius * sin(radians)
         )
+    }
+}
+
+/// The gauge needle: a radial segment pointing at `progress` along the arc.
+///
+/// It runs from `innerRatio` to `outerRatio` of the radius rather than from
+/// the hub, so it sweeps the scale without crossing the reference pitch
+/// printed in the middle of the dial.
+private struct NeedleShape: Shape {
+    var progress: Double
+    var startAngle: Double
+    var sweep: Double
+    var innerRatio: Double
+    var outerRatio: Double
+
+    /// Animating `progress` is what makes the needle swing rather than jump.
+    var animatableData: Double {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let side = min(rect.width, rect.height)
+        let center = CGPoint(x: rect.midX, y: side / 2)
+        let radius = side / 2
+        let radians = (startAngle + sweep * progress) * .pi / 180
+        let dx = cos(radians)
+        let dy = sin(radians)
+
+        var path = Path()
+        path.move(to: CGPoint(
+            x: center.x + dx * radius * innerRatio,
+            y: center.y + dy * radius * innerRatio
+        ))
+        path.addLine(to: CGPoint(
+            x: center.x + dx * radius * outerRatio,
+            y: center.y + dy * radius * outerRatio
+        ))
+        return path
     }
 }
 

@@ -142,6 +142,36 @@ public final class TunerViewModel: ObservableObject {
         detector.note != nil
     }
 
+    /// The pitch the needle is measured *against*, shown in the middle of the
+    /// gauge. With a string locked that's the string; otherwise it's the
+    /// nearest chromatic note, which is what a chromatic tuner references.
+    ///
+    /// Distinct from `noteLabel`, which names what's actually sounding. They
+    /// agree in chromatic mode and diverge once a string is locked — playing
+    /// 80 cents flat of A should keep "A4" in the middle with the needle hard
+    /// left, not relabel the centre "G#4".
+    public var referenceLabel: String {
+        if let targetMIDI {
+            return PitchMath.frequencyToNote(
+                PitchMath.midiToFrequency(targetMIDI, a4: detector.a4Reference),
+                a4: detector.a4Reference
+            ).label
+        }
+        return detector.note?.label ?? "—"
+    }
+
+    /// Frequency of that reference pitch, for the sub-label.
+    public var referenceFrequencyLabel: String {
+        let midi: Int?
+        if let targetMIDI {
+            midi = targetMIDI
+        } else {
+            midi = detector.note?.midi
+        }
+        guard let midi else { return "" }
+        return String(format: "ref %.1f Hz", PitchMath.midiToFrequency(midi, a4: detector.a4Reference))
+    }
+
     public var isInTune: Bool {
         hasSignal && abs(cents) <= Self.inTuneCentsThreshold
     }
