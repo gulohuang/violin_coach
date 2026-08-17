@@ -88,10 +88,19 @@ numbering.
   *clarity* value (1 - aperiodicity) for free — which is what lets the detector
   distinguish "no clear pitch" from "a pitch" instead of only asking whether the
   signal was loud enough.
+- **Keep YIN's global-minimum fallback.** When no lag dips below the paper's
+  0.15 threshold, standard YIN falls back to the global minimum of the CMNDF.
+  Removing that fallback looks like a purity win and is a silent disaster: real
+  playing through a real microphone frequently never dips below 0.15, so the
+  detector returns nothing at all while the global minimum sits on the correct
+  pitch at ~0.85 clarity. Synthetic test tones always dip, so unit tests pass
+  and the app is dead. Whether a candidate is good enough is `minimumClarity`'s
+  call, not the dip finder's.
 - **Sensitivity is a confidence threshold, not a volume gate.**
-  `PitchDetector.Sensitivity` maps five levels onto YIN's aperiodicity
-  tolerance (0.05–0.35; the paper's usual range is 0.10–0.20), with a small
-  RMS floor kept only as a cheap early-out on silent buffers. A loud bow
+  `PitchDetector.Sensitivity` maps five levels onto a `minimumClarity` floor
+  (0.90 down to 0.30), with a small RMS floor kept only as a cheap early-out on
+  silent buffers. Values come from measuring clarity on a violin timbre at
+  rising noise: clean ~1.0, badly degraded ~0.34, white noise 0.05–0.07. A loud bow
   scratch passes any loudness test but scores badly on periodicity, which is
   the whole point. Practice defaults to `.highest`: it already knows which
   note it wants, and the ±38 cent window plus three consecutive readings do

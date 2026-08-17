@@ -125,13 +125,12 @@ final class PitchMathTests: XCTestCase {
         XCTAssertEqual(PitchDetector.Sensitivity.medium.minimumRMS, PitchMath.defaultMinimumRMS)
 
         // All five levels, on both knobs, must move monotonically with the
-        // label. YIN's threshold runs the other way from the amplitude gate —
-        // more sensitive means a *higher* aperiodicity tolerance but a *lower*
-        // loudness floor — which is exactly the kind of thing to wire backwards.
+        // label: more sensitive means both a lower clarity requirement and a
+        // lower loudness floor.
         let ordered = PitchDetector.Sensitivity.allCases
         XCTAssertEqual(ordered.count, 5)
         for (a, b) in zip(ordered, ordered.dropFirst()) {
-            XCTAssertLessThan(a.yinThreshold, b.yinThreshold, "\(a.label) -> \(b.label)")
+            XCTAssertGreaterThan(a.minimumClarity, b.minimumClarity, "\(a.label) -> \(b.label)")
             XCTAssertGreaterThan(a.minimumRMS, b.minimumRMS, "\(a.label) -> \(b.label)")
         }
     }
@@ -170,12 +169,35 @@ final class PitchMathTests: XCTestCase {
         }
     }
 
-    func testThresholdControlsStrictness() {
-        // Ordering is the invariant: a stricter threshold must never accept
+    /// The bug this replaced: without YIN's global-minimum fallback, a signal
+    /// whose CMNDF never dips below the paper's 0.15 threshold was reported as
+    /// "no pitch" — which is most real playing through a real microphone. The
+    /// fallback must find the pitch, and clarity must then decide.
+    func testNoisyToneStillDetectedViaGlobalMinimumFallback() {
+        var generator = SystemRandomNumberGenerator()
+        let target = 440.0
+        let buffer = (0..<4410).map { i -> Float in
+            let t = Double(i) / sampleRate
+            let tone = 0.8 * sin(2 * Double.pi * target * t)
+            return Float(tone + Double.random(in: -0.22...0.22, using: &generator))
+        }
+        guard let estimate = PitchMath.yin(buffer, sampleRate: sampleRate, minimumClarity: 0.3) else {
+            XCTFail("noisy tone should still be detected through the fallback")
+            return
+        }
+        XCTAssertEqual(estimate.frequency / target, 1.0, accuracy: 0.02)
+        // Degraded, but nowhere near the noise floor.
+        XCTAssertGreaterThan(estimate.clarity, 0.3)
+    }
+
+    func testClarityGateControlsStrictness() {
+        // Ordering is the invariant: a stricter gate must never accept
         // something a looser one rejected.
         let tone = generateSineWave(frequency: 440, seconds: 0.1)
-        XCTAssertNotNil(PitchMath.yin(tone, sampleRate: sampleRate, threshold: 0.05))
-        XCTAssertNotNil(PitchMath.yin(tone, sampleRate: sampleRate, threshold: 0.35))
+        XCTAssertNotNil(PitchMath.yin(tone, sampleRate: sampleRate, minimumClarity: 0.9))
+        XCTAssertNotNil(PitchMath.yin(tone, sampleRate: sampleRate, minimumClarity: 0.3))
+        // A clarity gate of 1.0 is unreachable in practice; nothing should pass.
+        XCTAssertNil(PitchMath.yin(tone, sampleRate: sampleRate, minimumClarity: 1.01))
     }
 
     // MARK: - cents(from:to:)

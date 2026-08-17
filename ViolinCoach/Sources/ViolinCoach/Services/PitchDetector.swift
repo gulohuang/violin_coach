@@ -9,9 +9,8 @@ import Combine
 public final class PitchDetector: ObservableObject {
     /// How readily the detector accepts a reading as a pitch.
     /// Defined primarily by **confidence**, not loudness. YIN reports how
-    /// aperiodic the signal was at the chosen lag, and `yinThreshold` is the
-    /// proportion of aperiodicity tolerated — the standard definition from the
-    /// YIN paper, whose usual working range is 0.10–0.20.
+    /// periodic the signal was at the chosen lag, and `minimumClarity` is how
+    /// periodic it has to be before the reading counts as a note.
     ///
     /// This is a better question than the old amplitude-only gate could ask.
     /// A loud but ambiguous sound — bow scratch, two strings ringing, a chair
@@ -33,14 +32,21 @@ public final class PitchDetector: ObservableObject {
             }
         }
 
-        /// Aperiodicity tolerated. Higher = more permissive = more sensitive.
-        public var yinThreshold: Double {
+        /// How periodic a signal must be to count as a note, 0...1.
+        /// Lower = more permissive = more sensitive.
+        ///
+        /// Values chosen by measuring YIN's clarity on a synthetic violin
+        /// timbre at increasing noise levels: clean and lightly noisy signals
+        /// score above 0.95, a badly degraded one around 0.34, and white noise
+        /// only 0.05–0.07 — so even the loosest setting rejects noise by a
+        /// wide margin.
+        public var minimumClarity: Double {
             switch self {
-            case .lowest: return 0.05
-            case .low: return 0.10
-            case .medium: return 0.15
-            case .high: return 0.22
-            case .highest: return 0.35
+            case .lowest: return 0.90
+            case .low: return 0.78
+            case .medium: return 0.65
+            case .high: return 0.50
+            case .highest: return 0.30
             }
         }
 
@@ -85,10 +91,10 @@ public final class PitchDetector: ObservableObject {
             // Written on the same serial queue that reads it, which is what
             // keeps the gate's `@unchecked` conformance honest.
             let rmsFloor = sensitivity.minimumRMS
-            let yinThreshold = sensitivity.yinThreshold
+            let clarityFloor = sensitivity.minimumClarity
             analysisQueue.async { [gate] in
                 gate.minimumRMS = rmsFloor
-                gate.yinThreshold = yinThreshold
+                gate.minimumClarity = clarityFloor
             }
         }
     }
@@ -139,7 +145,7 @@ public final class PitchDetector: ObservableObject {
         /// effect on the next buffer without tearing down and restarting the
         /// engine — the tap closure captures the gate, not the value.
         var minimumRMS = PitchMath.defaultMinimumRMS
-        var yinThreshold = 0.15
+        var minimumClarity = 0.65
     }
 
     private nonisolated let gate = AnalysisGate()
@@ -213,7 +219,7 @@ public final class PitchDetector: ObservableObject {
                             samples,
                             sampleRate: sampleRate,
                             maxWindow: window,
-                            threshold: gate.yinThreshold,
+                            minimumClarity: gate.minimumClarity,
                             minimumRMS: gate.minimumRMS
                         )
                         Task { @MainActor in

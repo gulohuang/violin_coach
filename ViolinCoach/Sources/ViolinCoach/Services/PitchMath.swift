@@ -63,19 +63,27 @@ public enum PitchMath {
     /// for free, so the detector can tell "no clear pitch" from "a pitch",
     /// rather than only being able to ask whether the signal was loud enough.
     ///
+    /// The paper's absolute threshold, used only to pick *which* dip to take.
+    /// Fixed rather than user-facing: its job is octave safety — preferring
+    /// the first confident dip over the global minimum, which is often an
+    /// octave down — not deciding what counts as a note. That decision is
+    /// `minimumClarity`.
+    static let yinDipThreshold = 0.15
+
     /// - Parameters:
-    ///   - threshold: Proportion of aperiodic power tolerated. Lower is
-    ///     stricter: fewer detections, higher confidence in each. The paper's
-    ///     usual working range is 0.10–0.20.
+    ///   - minimumClarity: How periodic a signal must be to count as a pitch,
+    ///     0...1. This is the sensitivity knob. Real playing through a real
+    ///     microphone lands around 0.8–1.0; noise sits near 0.05.
     ///   - minimumRMS: Amplitude floor, applied first so silent buffers cost
     ///     almost nothing.
     public static func yin(
         _ buffer: [Float],
         sampleRate: Double,
         maxWindow: Int? = nil,
-        threshold: Double = 0.15,
+        minimumClarity: Double = 0.65,
         minimumRMS: Double = defaultMinimumRMS
     ) -> PitchEstimate? {
+        let threshold = yinDipThreshold
         let n = min(buffer.count, maxWindow ?? buffer.count)
         guard n > 0, sampleRate > 0 else { return nil }
         guard rms(buffer, maxWindow: maxWindow) >= minimumRMS else { return nil }
@@ -121,10 +129,26 @@ public enum PitchMath {
             }
             tau += 1
         }
-        // Nothing periodic enough. Reported as "no pitch" rather than
-        // returning the global minimum with low confidence — for a tuner,
-        // showing nothing beats showing a fabricated note.
-        guard chosenTau > 0 else { return nil }
+
+        // Fall back to the global minimum when nothing dips below the
+        // threshold. This is standard YIN and it is load-bearing: a real
+        // instrument through a real microphone frequently never dips below
+        // 0.15, so refusing to fall back means detecting nothing at all —
+        // even while the global minimum sits on the correct pitch with ~0.85
+        // clarity. Whether that candidate is good enough is `minimumClarity`'s
+        // decision, made below, not this step's.
+        if chosenTau < 0 {
+            var bestTau = minTau
+            var bestValue = cmnd[minTau]
+            for t in minTau...maxTau where cmnd[t] < bestValue {
+                bestValue = cmnd[t]
+                bestTau = t
+            }
+            chosenTau = bestTau
+        }
+
+        let clarity = max(0, min(1, 1 - cmnd[chosenTau]))
+        guard clarity >= minimumClarity else { return nil }
 
         // Step 4: parabolic interpolation for sub-sample lag precision.
         var refinedTau = Double(chosenTau)
@@ -141,7 +165,6 @@ public enum PitchMath {
 
         let frequency = sampleRate / refinedTau
         guard frequency.isFinite, frequency >= minFrequency, frequency <= maxFrequency else { return nil }
-        let clarity = max(0, min(1, 1 - cmnd[chosenTau]))
         return PitchEstimate(frequency: frequency, clarity: clarity)
     }
 
