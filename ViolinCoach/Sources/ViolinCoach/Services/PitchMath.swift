@@ -8,6 +8,34 @@ import Foundation
 public enum PitchMath {
     private static let noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
+    /// Signal below this RMS is treated as silence and not analyzed. This is
+    /// the knob behind the tuner's sensitivity setting — see
+    /// `PitchDetector.Sensitivity`.
+    public static let defaultMinimumRMS = 0.01
+
+    /// Root-mean-square amplitude of the analysis window, 0...1 for normalized
+    /// float samples. Drives the input level meter, and is what
+    /// `autoCorrelate` gates on before doing the expensive work.
+    public static func rms(_ buffer: [Float], maxWindow: Int? = nil) -> Double {
+        let n = min(buffer.count, maxWindow ?? buffer.count)
+        guard n > 0 else { return 0 }
+        // Only the first `n` samples — the analysis window — take part, so the
+        // sum and the divisor stay consistent when maxWindow trims the buffer.
+        var sum: Double = 0
+        for i in 0..<n { sum += Double(buffer[i]) * Double(buffer[i]) }
+        return (sum / Double(n)).squareRoot()
+    }
+
+    /// Maps an RMS amplitude onto 0...1 for display, on a decibel scale.
+    /// Linear RMS makes a useless meter — normal playing sits in the bottom
+    /// few percent of it — so this spreads `floorDB`...0 dBFS across the bar,
+    /// which is how audio level meters are conventionally read.
+    public static func meterLevel(rms: Double, floorDB: Double = -60) -> Double {
+        guard rms > 0 else { return 0 }
+        let db = 20 * log10(rms)
+        return max(0, min(1, (db - floorDB) / -floorDB))
+    }
+
     /// Detects the fundamental frequency of a monophonic audio buffer via
     /// normalized autocorrelation. Returns nil when no clear periodicity is
     /// found (silence, noise, or a signal too quiet to trust).
@@ -24,16 +52,17 @@ public enum PitchMath {
     /// `PitchDetector` caps it, because the extra samples buy no accuracy —
     /// the lowest pitch tracked here (150Hz) has a 320-sample period at
     /// 48kHz, so ~2048 samples already covers six full cycles.
-    public static func autoCorrelate(_ buffer: [Float], sampleRate: Double, maxWindow: Int? = nil) -> Double? {
+    public static func autoCorrelate(
+        _ buffer: [Float],
+        sampleRate: Double,
+        maxWindow: Int? = nil,
+        minimumRMS: Double = defaultMinimumRMS
+    ) -> Double? {
         let n = min(buffer.count, maxWindow ?? buffer.count)
         guard n > 0 else { return nil }
 
-        // Only the first `n` samples — the analysis window — take part, so the
-        // sum and the divisor stay consistent when maxWindow trims the buffer.
-        var rms: Double = 0
-        for i in 0..<n { rms += Double(buffer[i]) * Double(buffer[i]) }
-        rms = (rms / Double(n)).squareRoot()
-        guard rms >= 0.01 else { return nil }
+        let rms = Self.rms(buffer, maxWindow: maxWindow)
+        guard rms >= minimumRMS else { return nil }
 
         var start = 0
         var end = n - 1

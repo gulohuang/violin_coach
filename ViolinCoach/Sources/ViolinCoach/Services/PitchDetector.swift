@@ -7,10 +7,59 @@ import Combine
 /// hardware (which XCTest can't reliably do in CI/simulator anyway).
 @MainActor
 public final class PitchDetector: ObservableObject {
+    /// How quiet a sound the detector will still try to find a pitch in.
+    /// Higher sensitivity means a lower amplitude gate, so faint playing
+    /// registers — at the cost of chasing room noise between notes.
+    public enum Sensitivity: String, CaseIterable, Identifiable, Sendable {
+        case low, medium, high
+
+        public var id: String { rawValue }
+
+        public var label: String {
+            switch self {
+            case .low: return "Low"
+            case .medium: return "Medium"
+            case .high: return "High"
+            }
+        }
+
+        /// RMS below which a buffer is treated as silence. `medium` keeps the
+        /// value the detector used before this setting existed.
+        public var minimumRMS: Double {
+            switch self {
+            case .low: return 0.030
+            case .medium: return PitchMath.defaultMinimumRMS // 0.01
+            case .high: return 0.003
+            }
+        }
+
+        public var detail: String {
+            switch self {
+            case .low: return "Ignores quiet sounds. Best in a noisy room."
+            case .medium: return "Balanced for normal practice."
+            case .high: return "Picks up faint playing. May chase room noise."
+            }
+        }
+    }
+
     @Published public private(set) var frequency: Double?
     @Published public private(set) var note: PitchMath.NoteMatch?
     @Published public private(set) var isListening = false
     @Published public var a4Reference: Double = 440
+
+    /// Input level, 0...1 on a decibel scale, smoothed for display.
+    @Published public private(set) var level: Double = 0
+
+    public var sensitivity: Sensitivity = .medium {
+        didSet {
+            guard sensitivity != oldValue else { return }
+            objectWillChange.send()
+            // Written on the same serial queue that reads it, which is what
+            // keeps the gate's `@unchecked` conformance honest.
+            let threshold = sensitivity.minimumRMS
+            analysisQueue.async { [gate] in gate.minimumRMS = threshold }
+        }
+    }
 
     /// The engine lives off the main actor. `AVAudioSession.setActive`,
     /// `AVAudioEngine.prepare()` and `.start()` are synchronous CoreAudio
@@ -54,6 +103,10 @@ public final class PitchDetector: ObservableObject {
     /// papering-over.
     private final class AnalysisGate: @unchecked Sendable {
         var isBusy = false
+        /// Mirrors `sensitivity.minimumRMS`. Kept here so a change takes
+        /// effect on the next buffer without tearing down and restarting the
+        /// engine — the tap closure captures the gate, not the value.
+        var minimumRMS = PitchMath.defaultMinimumRMS
     }
 
     private nonisolated let gate = AnalysisGate()
@@ -117,9 +170,20 @@ public final class PitchDetector: ObservableObject {
                         gate.isBusy = true
                         defer { gate.isBusy = false }
 
-                        let detected = PitchMath.autoCorrelate(samples, sampleRate: sampleRate, maxWindow: window)
+                        // The level meter reads the raw input, so it's
+                        // computed regardless of whether the gate lets the
+                        // pitch analysis proceed — that's what lets the meter
+                        // show signal arriving while sensitivity is set too
+                        // low to detect it.
+                        let rms = PitchMath.rms(samples, maxWindow: window)
+                        let detected = PitchMath.autoCorrelate(
+                            samples,
+                            sampleRate: sampleRate,
+                            maxWindow: window,
+                            minimumRMS: gate.minimumRMS
+                        )
                         Task { @MainActor in
-                            self.publish(frequency: detected, token: token)
+                            self.publish(frequency: detected, rms: rms, token: token)
                         }
                     }
                 }
@@ -153,6 +217,7 @@ public final class PitchDetector: ObservableObject {
         isListening = false
         frequency = nil
         note = nil
+        level = 0
 
         // Teardown is the slow part; let it happen off the main thread.
         audioQueue.async { [engineBox] in
@@ -162,8 +227,15 @@ public final class PitchDetector: ObservableObject {
     }
 
     /// Applies a completed analysis, ignoring anything from a previous run.
-    private func publish(frequency detected: Double?, token: Int) {
+    private func publish(frequency detected: Double?, rms: Double, token: Int) {
         guard token == runToken, isListening else { return }
+
+        // Meter ballistics: rise quickly so an attack registers, fall slowly
+        // so the bar stays readable instead of flickering between buffers.
+        let target = PitchMath.meterLevel(rms: rms)
+        let smoothing = target > level ? 0.6 : 0.15
+        let newLevel = level + (target - level) * smoothing
+        if abs(newLevel - level) > 0.005 { level = newLevel }
 
         guard let detected else {
             if frequency != nil { frequency = nil }

@@ -41,6 +41,23 @@ public final class TunerViewModel: ObservableObject {
         detector.isListening
     }
 
+    /// Input level, 0...1 on a decibel scale.
+    public var level: Double {
+        detector.level
+    }
+
+    public var sensitivity: PitchDetector.Sensitivity {
+        get { detector.sensitivity }
+        set { detector.sensitivity = newValue }
+    }
+
+    /// Where the current sensitivity's amplitude gate falls on the level
+    /// meter, so the bar can mark it. Seeing signal arrive but stay under the
+    /// mark is what explains a tuner that looks alive but reports nothing.
+    public var sensitivityThresholdLevel: Double {
+        PitchMath.meterLevel(rms: detector.sensitivity.minimumRMS)
+    }
+
     /// MIDI number of the detected pitch, if any — used to highlight the
     /// nearest open string.
     public var detectedMIDI: Int? {

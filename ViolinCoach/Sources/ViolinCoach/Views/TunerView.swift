@@ -30,6 +30,14 @@ struct TunerView: View {
                         onSelect: { viewModel.selectString(midi: $0) }
                     )
 
+                    InputLevelBar(
+                        level: viewModel.level,
+                        thresholdLevel: viewModel.sensitivityThresholdLevel,
+                        isAboveThreshold: viewModel.level >= viewModel.sensitivityThresholdLevel
+                    )
+
+                    sensitivityCard
+
                     referenceCard
 
                     Button {
@@ -52,6 +60,29 @@ struct TunerView: View {
             .navigationTitle("Tuner")
         }
         .onDisappear { viewModel.stop() }
+    }
+
+    private var sensitivityCard: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            Text("Detection sensitivity")
+                .font(.subheadline.weight(.medium))
+
+            Picker("Detection sensitivity", selection: Binding(
+                get: { viewModel.sensitivity },
+                set: { viewModel.sensitivity = $0 }
+            )) {
+                ForEach(PitchDetector.Sensitivity.allCases) { option in
+                    Text(option.label).tag(option)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            Text(viewModel.sensitivity.detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .animation(Theme.Motion.gentle, value: viewModel.sensitivity)
+        }
+        .card()
     }
 
     private var referenceCard: some View {
@@ -255,6 +286,61 @@ private struct ArcShape: Shape {
             clockwise: false
         )
         return path
+    }
+}
+
+// MARK: - Input level
+
+/// Microphone input level, with a tick marking where the current sensitivity
+/// setting's gate falls. The marker is the point: a bar that shows sound
+/// arriving while the tuner reports nothing is confusing until you can see
+/// that the signal is landing below the threshold.
+private struct InputLevelBar: View {
+    let level: Double
+    let thresholdLevel: Double
+    let isAboveThreshold: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+            HStack {
+                Label("Input level", systemImage: "mic.fill")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(isAboveThreshold ? "Detecting" : "Too quiet")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(isAboveThreshold ? Theme.Palette.inTune : .secondary)
+                    .animation(Theme.Motion.gentle, value: isAboveThreshold)
+            }
+
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Theme.Palette.idle.opacity(0.22))
+
+                    Capsule()
+                        .fill(isAboveThreshold ? Theme.Palette.inTune : Theme.Palette.idle.opacity(0.6))
+                        .frame(width: max(0, min(1, level)) * geo.size.width)
+                        .animation(Theme.Motion.responsive, value: level)
+
+                    // Threshold marker
+                    Rectangle()
+                        .fill(Theme.Palette.outOfTune)
+                        .frame(width: 2)
+                        .offset(x: max(0, min(1, thresholdLevel)) * geo.size.width - 1)
+                        .animation(Theme.Motion.gentle, value: thresholdLevel)
+                }
+            }
+            .frame(height: 10)
+        }
+        .card(padding: Theme.Spacing.md)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Input level")
+        .accessibilityValue(
+            isAboveThreshold
+                ? "\(Int(level * 100)) percent, above the detection threshold"
+                : "\(Int(level * 100)) percent, below the detection threshold"
+        )
     }
 }
 

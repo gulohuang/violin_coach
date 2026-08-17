@@ -67,6 +67,61 @@ final class PitchMathTests: XCTestCase {
         XCTAssertEqual(match.label, "A4")
     }
 
+    // MARK: - rms / meterLevel / sensitivity
+
+    func testRMSOfSilenceIsZero() {
+        XCTAssertEqual(PitchMath.rms([Float](repeating: 0, count: 1024)), 0, accuracy: 0.0001)
+    }
+
+    func testRMSOfFullScaleSineIsAboutRootHalf() {
+        // A unit-amplitude sine has RMS 1/sqrt(2).
+        let buffer = (0..<4410).map { Float(sin(2 * Double.pi * 440 * Double($0) / sampleRate)) }
+        XCTAssertEqual(PitchMath.rms(buffer), 1 / 2.0.squareRoot(), accuracy: 0.01)
+    }
+
+    func testRMSHonoursMaxWindow() {
+        // Loud first half, silent second: windowing to the first half must
+        // report the loud level, not the average of both.
+        var buffer = [Float](repeating: 0.5, count: 1024)
+        buffer.append(contentsOf: [Float](repeating: 0, count: 1024))
+        XCTAssertEqual(PitchMath.rms(buffer, maxWindow: 1024), 0.5, accuracy: 0.0001)
+        XCTAssertEqual(PitchMath.rms(buffer), 0.5 / 2.0.squareRoot(), accuracy: 0.01)
+    }
+
+    func testMeterLevelSpansTheDecibelFloor() {
+        XCTAssertEqual(PitchMath.meterLevel(rms: 0), 0, accuracy: 0.0001)          // silence
+        XCTAssertEqual(PitchMath.meterLevel(rms: 1), 1, accuracy: 0.0001)          // 0 dBFS
+        XCTAssertEqual(PitchMath.meterLevel(rms: 0.001), 0, accuracy: 0.0001)      // -60 dBFS, at the floor
+        XCTAssertEqual(PitchMath.meterLevel(rms: 0.0001), 0, accuracy: 0.0001)     // below the floor, clamped
+        // Halfway up the bar is -30 dBFS, not half the amplitude — the point
+        // of using a decibel scale.
+        XCTAssertEqual(PitchMath.meterLevel(rms: pow(10, -30.0 / 20)), 0.5, accuracy: 0.0001)
+    }
+
+    // @MainActor because Sensitivity is nested inside the @MainActor
+    // PitchDetector, and nested types inherit that isolation.
+    @MainActor
+    func testSensitivityThresholdsAreOrderedAsLabelled() {
+        // "High" must mean a *lower* amplitude gate, or the control is backwards.
+        XCTAssertGreaterThan(
+            PitchDetector.Sensitivity.low.minimumRMS,
+            PitchDetector.Sensitivity.medium.minimumRMS
+        )
+        XCTAssertGreaterThan(
+            PitchDetector.Sensitivity.medium.minimumRMS,
+            PitchDetector.Sensitivity.high.minimumRMS
+        )
+        // Medium preserves the behavior the detector had before the setting existed.
+        XCTAssertEqual(PitchDetector.Sensitivity.medium.minimumRMS, PitchMath.defaultMinimumRMS)
+    }
+
+    func testMinimumRMSGatesDetection() {
+        // A quiet tone: detected when the gate is permissive, rejected when not.
+        let quiet = (0..<4410).map { Float(0.02 * sin(2 * Double.pi * 440 * Double($0) / sampleRate)) }
+        XCTAssertNotNil(PitchMath.autoCorrelate(quiet, sampleRate: sampleRate, minimumRMS: 0.003))
+        XCTAssertNil(PitchMath.autoCorrelate(quiet, sampleRate: sampleRate, minimumRMS: 0.030))
+    }
+
     // MARK: - cents(from:to:)
 
     func testCentsIsZeroAtTheReference() {
