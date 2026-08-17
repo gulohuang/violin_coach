@@ -38,6 +38,12 @@ public final class PracticeViewModel: ObservableObject {
 
     public init(detector: PitchDetector = PitchDetector()) {
         self.detector = detector
+        // Practice leans permissive on purpose. Here the app already knows
+        // which note it's waiting for, and the ±38 cent window plus three
+        // consecutive readings filter out spurious detections anyway — so the
+        // cost of a marginal reading is low, while missing a real note the
+        // player did sound is the failure that actually feels broken.
+        detector.sensitivity = .highest
         load()
         cancellable = detector.$frequency.sink { [weak self] frequency in
             self?.handle(frequency: frequency)
@@ -54,9 +60,25 @@ public final class PracticeViewModel: ObservableObject {
         }
     }
 
+    /// Jumps the cursor to a note, so practice can start anywhere in the piece
+    /// rather than only from the top. Works whether or not practice is running:
+    /// tapping mid-session moves on immediately, and tapping while stopped
+    /// chooses where the next Start begins.
+    public func moveCursor(to index: Int) {
+        guard let score, !score.playableNotes.isEmpty else { return }
+        currentIndex = max(0, min(score.playableNotes.count - 1, index))
+        direction = nil
+        stableCount = 0
+        isComplete = false
+    }
+
     public func start() {
         guard let score, !score.playableNotes.isEmpty else { return }
-        currentIndex = 0
+        // Keeps a spot chosen by tapping the score; only falls back to the
+        // beginning when no position has been picked.
+        if currentIndex < 0 || currentIndex >= score.playableNotes.count {
+            currentIndex = 0
+        }
         direction = nil
         isComplete = false
         stableCount = 0
@@ -67,7 +89,9 @@ public final class PracticeViewModel: ObservableObject {
     public func stop() {
         isActive = false
         detector.stop()
-        currentIndex = -1
+        // The cursor stays where it is rather than resetting to -1, so a spot
+        // chosen by tapping — or simply where you got to — survives a stop and
+        // Start resumes from there.
         direction = nil
         stableCount = 0
     }

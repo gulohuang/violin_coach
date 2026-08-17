@@ -137,6 +137,69 @@ public enum ScoreRenderer {
         return (max(availableWidth, plan.contentWidth), height)
     }
 
+    /// Which playable note a tap at `point` lands on, or nil if the tap is
+    /// outside the engraved area.
+    ///
+    /// Derived from the same row arithmetic `draw` uses rather than from the
+    /// formatted note positions, so it needs no `RenderContext` — which means
+    /// it is a pure function a view can call on a tap, and one that can be
+    /// unit tested. Within a measure the note is picked by *beat* position
+    /// rather than by evenly dividing the width, so a measure of mixed
+    /// durations still maps a tap to the note actually drawn there.
+    public static func playableIndex(
+        at point: CGPoint,
+        score: Score,
+        availableWidth: Double,
+        metrics: Metrics = Metrics()
+    ) -> Int? {
+        let measures = score.measures
+        guard !measures.isEmpty else { return nil }
+        let plan = rowPlan(measureCount: measures.count, availableWidth: availableWidth, metrics: metrics)
+
+        let rowStride = metrics.rowHeight + metrics.rowGap
+        let rowFloat = (Double(point.y) - metrics.topMargin) / rowStride
+        guard rowFloat >= -0.35 else { return nil } // above the first stave
+        let row = max(0, min(plan.rowCount - 1, Int(rowFloat)))
+
+        let isFirstRow = row == 0
+        let rowPrefix = metrics.rowPrefixWidth + (isFirstRow ? metrics.firstRowExtraWidth : 0)
+        let measureWidth = (plan.contentWidth - rowPrefix) / Double(plan.measuresPerRow)
+        guard measureWidth > 0 else { return nil }
+
+        // Taps in the clef/key-signature area belong to the row's first measure.
+        let xInRow = Double(point.x) - metrics.horizontalMargin - rowPrefix
+        let column = max(0, min(plan.measuresPerRow - 1, Int(floor(xInRow / measureWidth))))
+
+        let measureIndex = row * plan.measuresPerRow + column
+        guard measureIndex >= 0, measureIndex < measures.count else { return nil }
+        let measure = measures[measureIndex]
+
+        // Where in the measure the tap fell, 0...1.
+        let measureStartX = metrics.horizontalMargin + rowPrefix + Double(column) * measureWidth
+        let fraction = max(0, min(1, (Double(point.x) - measureStartX) / measureWidth))
+
+        // Walk the measure's notes by beat and take the one spanning the tap.
+        let totalBeats = measure.notes.reduce(0) { $0 + $1.beatsInQuarters }
+        guard totalBeats > 0 else { return nil }
+        var elapsed = 0.0
+        var chosen: ScoreNote?
+        for note in measure.notes {
+            let end = (elapsed + note.beatsInQuarters) / totalBeats
+            if fraction <= end || note.id == measure.notes.last?.id {
+                chosen = note
+                break
+            }
+            elapsed += note.beatsInQuarters
+        }
+
+        // Rests aren't playable positions; fall forward to the next real note.
+        let playable = score.playableNotes
+        guard let chosen else { return nil }
+        if let exact = playable.firstIndex(where: { $0.id == chosen.id }) { return exact }
+        if let next = playable.firstIndex(where: { $0.id > chosen.id }) { return next }
+        return playable.isEmpty ? nil : playable.count - 1
+    }
+
     /// Draws `score` into `context` and returns the resulting layout. Call
     /// this from inside a `VexCanvas` draw closure.
     @discardableResult

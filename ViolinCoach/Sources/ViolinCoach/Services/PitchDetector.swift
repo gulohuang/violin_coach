@@ -2,42 +2,66 @@ import AVFoundation
 import Combine
 
 /// Listens to the microphone via `AVAudioEngine` and publishes the detected
-/// pitch, using `PitchMath.autoCorrelate` for the actual DSP. Kept separate
-/// from `PitchMath` so the math can be unit tested without touching audio
-/// hardware (which XCTest can't reliably do in CI/simulator anyway).
+/// pitch, using `PitchMath.yin` for the actual DSP. Kept separate from
+/// `PitchMath` so the math can be unit tested without touching audio hardware
+/// (which XCTest can't reliably do in CI/simulator anyway).
 @MainActor
 public final class PitchDetector: ObservableObject {
-    /// How quiet a sound the detector will still try to find a pitch in.
-    /// Higher sensitivity means a lower amplitude gate, so faint playing
-    /// registers — at the cost of chasing room noise between notes.
+    /// How readily the detector accepts a reading as a pitch.
+    /// Defined primarily by **confidence**, not loudness. YIN reports how
+    /// aperiodic the signal was at the chosen lag, and `yinThreshold` is the
+    /// proportion of aperiodicity tolerated — the standard definition from the
+    /// YIN paper, whose usual working range is 0.10–0.20.
+    ///
+    /// This is a better question than the old amplitude-only gate could ask.
+    /// A loud but ambiguous sound — bow scratch, two strings ringing, a chair
+    /// scraping — passes any loudness test, but scores badly on periodicity
+    /// and is now correctly rejected. `minimumRMS` remains as a cheap first
+    /// pass so silent buffers cost almost nothing.
     public enum Sensitivity: String, CaseIterable, Identifiable, Sendable {
-        case low, medium, high
+        case lowest, low, medium, high, highest
 
         public var id: String { rawValue }
 
         public var label: String {
             switch self {
+            case .lowest: return "Lowest"
             case .low: return "Low"
             case .medium: return "Medium"
             case .high: return "High"
+            case .highest: return "Highest"
             }
         }
 
-        /// RMS below which a buffer is treated as silence. `medium` keeps the
-        /// value the detector used before this setting existed.
+        /// Aperiodicity tolerated. Higher = more permissive = more sensitive.
+        public var yinThreshold: Double {
+            switch self {
+            case .lowest: return 0.05
+            case .low: return 0.10
+            case .medium: return 0.15
+            case .high: return 0.22
+            case .highest: return 0.35
+            }
+        }
+
+        /// Amplitude floor, applied before the expensive analysis.
         public var minimumRMS: Double {
             switch self {
-            case .low: return 0.030
+            case .lowest: return 0.030
+            case .low: return 0.020
             case .medium: return PitchMath.defaultMinimumRMS // 0.01
-            case .high: return 0.003
+            case .high: return 0.005
+            case .highest: return 0.002
             }
         }
 
         public var detail: String {
             switch self {
-            case .low: return "Ignores quiet sounds. Best in a noisy room."
+            case .lowest: return "Only clear, strong notes. Best in a noisy room."
+            case .low: return "Strict. Rejects most bow noise."
             case .medium: return "Balanced for normal practice."
-            case .high: return "Picks up faint playing. May chase room noise."
+            case .high: return "Picks up faint playing."
+            case .highest: return "Most responsive. May track bow noise between notes."
             }
         }
     }
@@ -50,14 +74,22 @@ public final class PitchDetector: ObservableObject {
     /// Input level, 0...1 on a decibel scale, smoothed for display.
     @Published public private(set) var level: Double = 0
 
+    /// How confidently periodic the last accepted reading was, 0...1.
+    /// Distinct from `level`: a loud bow scratch is high level, low clarity.
+    @Published public private(set) var clarity: Double = 0
+
     public var sensitivity: Sensitivity = .medium {
         didSet {
             guard sensitivity != oldValue else { return }
             objectWillChange.send()
             // Written on the same serial queue that reads it, which is what
             // keeps the gate's `@unchecked` conformance honest.
-            let threshold = sensitivity.minimumRMS
-            analysisQueue.async { [gate] in gate.minimumRMS = threshold }
+            let rmsFloor = sensitivity.minimumRMS
+            let yinThreshold = sensitivity.yinThreshold
+            analysisQueue.async { [gate] in
+                gate.minimumRMS = rmsFloor
+                gate.yinThreshold = yinThreshold
+            }
         }
     }
 
@@ -77,9 +109,9 @@ public final class PitchDetector: ObservableObject {
     private nonisolated let audioQueue = DispatchQueue(label: "com.violincoach.audio-engine")
     private let bufferSize: AVAudioFrameCount = 4096
 
-    /// Autocorrelation is far too expensive to run on the main thread: at
-    /// 48kHz a 4096-frame buffer costs on the order of a million
-    /// multiply-adds, and buffers arrive ~12 times a second. Doing that on the
+    /// Pitch detection is far too expensive to run on the main thread: YIN's
+    /// difference function costs hundreds of thousands of operations per
+    /// buffer, and buffers arrive ~12 times a second. Doing that on the
     /// MainActor starved the UI badly enough that tab switches and button
     /// taps stopped registering. It doesn't belong on the tap's thread either
     /// — that's a real-time audio callback, and blocking it causes glitches —
@@ -88,8 +120,8 @@ public final class PitchDetector: ObservableObject {
     /// a `let` of a Sendable type is safe to read from anywhere.
     private nonisolated let analysisQueue = DispatchQueue(label: "com.violincoach.pitch-analysis", qos: .userInitiated)
 
-    /// Samples analyzed per buffer. See `PitchMath.autoCorrelate(_:sampleRate:maxWindow:)`
-    /// — more than this buys no accuracy in the violin's range.
+    /// Samples analyzed per buffer. More than this buys no accuracy in the
+    /// violin's range, and YIN needs room for its longest lag on top.
     private let analysisWindow = 2048
 
     /// Drop-if-busy flag. Buffers arriving while an analysis is in flight are
@@ -107,6 +139,7 @@ public final class PitchDetector: ObservableObject {
         /// effect on the next buffer without tearing down and restarting the
         /// engine — the tap closure captures the gate, not the value.
         var minimumRMS = PitchMath.defaultMinimumRMS
+        var yinThreshold = 0.15
     }
 
     private nonisolated let gate = AnalysisGate()
@@ -176,14 +209,15 @@ public final class PitchDetector: ObservableObject {
                         // show signal arriving while sensitivity is set too
                         // low to detect it.
                         let rms = PitchMath.rms(samples, maxWindow: window)
-                        let detected = PitchMath.autoCorrelate(
+                        let estimate = PitchMath.yin(
                             samples,
                             sampleRate: sampleRate,
                             maxWindow: window,
+                            threshold: gate.yinThreshold,
                             minimumRMS: gate.minimumRMS
                         )
                         Task { @MainActor in
-                            self.publish(frequency: detected, rms: rms, token: token)
+                            self.publish(estimate: estimate, rms: rms, token: token)
                         }
                     }
                 }
@@ -218,6 +252,7 @@ public final class PitchDetector: ObservableObject {
         frequency = nil
         note = nil
         level = 0
+        clarity = 0
 
         // Teardown is the slow part; let it happen off the main thread.
         audioQueue.async { [engineBox] in
@@ -227,7 +262,7 @@ public final class PitchDetector: ObservableObject {
     }
 
     /// Applies a completed analysis, ignoring anything from a previous run.
-    private func publish(frequency detected: Double?, rms: Double, token: Int) {
+    private func publish(estimate: PitchMath.PitchEstimate?, rms: Double, token: Int) {
         guard token == runToken, isListening else { return }
 
         // Meter ballistics: rise quickly so an attack registers, fall slowly
@@ -237,11 +272,14 @@ public final class PitchDetector: ObservableObject {
         let newLevel = level + (target - level) * smoothing
         if abs(newLevel - level) > 0.005 { level = newLevel }
 
-        guard let detected else {
+        guard let estimate else {
             if frequency != nil { frequency = nil }
             if note != nil { note = nil }
+            if clarity != 0 { clarity = 0 }
             return
         }
+        let detected = estimate.frequency
+        if abs(estimate.clarity - clarity) > 0.02 { clarity = estimate.clarity }
 
         let match = PitchMath.frequencyToNote(detected, a4: a4Reference)
         // Every assignment to a @Published fires objectWillChange, which the

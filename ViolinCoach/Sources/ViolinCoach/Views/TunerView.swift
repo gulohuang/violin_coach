@@ -68,15 +68,30 @@ struct TunerView: View {
             Text("Detection sensitivity")
                 .font(.subheadline.weight(.medium))
 
-            Picker("Detection sensitivity", selection: Binding(
-                get: { viewModel.sensitivity },
-                set: { viewModel.sensitivity = $0 }
-            )) {
-                ForEach(PitchDetector.Sensitivity.allCases) { option in
-                    Text(option.label).tag(option)
-                }
+            // A slider rather than a segmented control: five labels don't fit
+            // across a phone, and sensitivity is an ordered scale, which is
+            // what a slider expresses.
+            let options = PitchDetector.Sensitivity.allCases
+            Slider(
+                value: Binding(
+                    get: { Double(options.firstIndex(of: viewModel.sensitivity) ?? 2) },
+                    set: { viewModel.sensitivity = options[max(0, min(options.count - 1, Int($0.rounded())))] }
+                ),
+                in: 0...Double(options.count - 1),
+                step: 1
+            )
+
+            HStack {
+                Text(options.first?.label ?? "")
+                Spacer()
+                Text(viewModel.sensitivity.label)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(Theme.Palette.accent)
+                Spacer()
+                Text(options.last?.label ?? "")
             }
-            .pickerStyle(.segmented)
+            .font(.caption2)
+            .foregroundStyle(.secondary)
 
             Text(viewModel.sensitivity.detail)
                 .font(.caption)

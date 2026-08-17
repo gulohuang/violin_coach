@@ -13,11 +13,20 @@ DocC guides rather than from memory — but reading source is not the same as
 compiling against it. Assume the first `xcodebuild` will surface errors and
 budget time for a fix-up pass.
 
-What *is* verified: the algorithms were first built and tested in the web
-prototype under `app/` (12 passing Vitest tests for pitch detection against
-synthetic violin-range sine waves). `PitchMath.swift` is a line-by-line port
-of that validated TypeScript, and `PitchMathTests.swift` ports the same test
-cases. So the *math* is trustworthy; the *Swift/Xcode integration* is not yet.
+What *is* verified: `PitchMath`'s algorithms were modelled and checked
+numerically before being written in Swift — the YIN implementation was ported
+to Python and run against synthetic violin-range tones (all within 0.014%),
+against a weak-fundamental violin timbre to confirm it does *not* drop
+octaves, and against noise and silence to confirm rejection. The score
+row-packing and tap hit-testing were likewise round-tripped in Python at
+several screen widths. `PitchMathTests` and `ScoreRendererSpellingTests`
+encode those same cases. So the *math* is trustworthy; the *Swift/Xcode
+integration* is not yet.
+
+Note the web prototype under `app/` has **diverged**: it still uses the
+original autocorrelation detector (12 passing Vitest tests) and was the
+starting point, but the Swift side has since moved to YIN. Treat `app/` as
+history, not as the reference implementation.
 
 First job on a Mac:
 
@@ -72,8 +81,21 @@ numbering.
   MIDI conversion) has zero AVFoundation dependency, so it's unit-testable
   without a mic. `PitchDetector` is the thin AVAudioEngine tap on top.
   Same split for `ToneSynthesizer` (buffer rendering) vs `ScoreAudioPlayer`.
-- **Autocorrelation, not FFT.** A bowed string's fundamental is often weaker
-  than its overtones, which defeats naive spectral peak-picking.
+- **YIN, not plain autocorrelation or FFT.** A bowed string's fundamental is
+  often weaker than its overtones. That defeats spectral peak-picking, and it
+  also makes plain autocorrelation drop octaves, since its peak grows at longer
+  lags. YIN's cumulative mean normalization removes that bias, and it returns a
+  *clarity* value (1 - aperiodicity) for free — which is what lets the detector
+  distinguish "no clear pitch" from "a pitch" instead of only asking whether the
+  signal was loud enough.
+- **Sensitivity is a confidence threshold, not a volume gate.**
+  `PitchDetector.Sensitivity` maps five levels onto YIN's aperiodicity
+  tolerance (0.05–0.35; the paper's usual range is 0.10–0.20), with a small
+  RMS floor kept only as a cheap early-out on silent buffers. A loud bow
+  scratch passes any loudness test but scores badly on periodicity, which is
+  the whole point. Practice defaults to `.highest`: it already knows which
+  note it wants, and the ±38 cent window plus three consecutive readings do
+  the filtering.
 - **Hand-rolled MusicXML parser** (`Foundation.XMLParser`, SAX-style). Keeps
   VexFoundation as the only third-party dependency. MusicXML is just XML;
   staff engraving is the genuinely hard part worth a dependency.

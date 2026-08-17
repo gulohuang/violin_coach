@@ -17,12 +17,20 @@ final class PitchMathTests: XCTestCase {
 
     func testReturnsNilForSilence() {
         let buffer = [Float](repeating: 0, count: 4096)
-        XCTAssertNil(PitchMath.autoCorrelate(buffer, sampleRate: sampleRate))
+        XCTAssertNil(PitchMath.yin(buffer, sampleRate: sampleRate))
     }
 
     func testReturnsNilForQuietNoise() {
         let buffer = (0..<4096).map { _ in Float.random(in: -0.0025...0.0025) }
-        XCTAssertNil(PitchMath.autoCorrelate(buffer, sampleRate: sampleRate))
+        XCTAssertNil(PitchMath.yin(buffer, sampleRate: sampleRate))
+    }
+
+    /// Loud but aperiodic. An amplitude gate alone would let this through and
+    /// report a fabricated note; YIN's periodicity test is what rejects it.
+    func testRejectsLoudWhiteNoise() {
+        var generator = SystemRandomNumberGenerator()
+        let buffer = (0..<4096).map { _ in Float.random(in: -0.8...0.8, using: &generator) }
+        XCTAssertNil(PitchMath.yin(buffer, sampleRate: sampleRate))
     }
 
     func testDetectsOpenG3() { assertDetects(196.0, tolerance: 0.01) }
@@ -33,10 +41,12 @@ final class PitchMathTests: XCTestCase {
 
     private func assertDetects(_ frequency: Double, tolerance: Double, file: StaticString = #filePath, line: UInt = #line) {
         let buffer = generateSineWave(frequency: frequency, seconds: 0.1)
-        guard let detected = PitchMath.autoCorrelate(buffer, sampleRate: sampleRate) else {
+        guard let estimate = PitchMath.yin(buffer, sampleRate: sampleRate) else {
             XCTFail("expected to detect \(frequency)Hz but got nil", file: file, line: line)
             return
         }
+        let detected = estimate.frequency
+        XCTAssertGreaterThan(estimate.clarity, 0.9, "a pure tone should be near-perfectly periodic", file: file, line: line)
         let relativeError = abs(detected - frequency) / frequency
         XCTAssertLessThan(relativeError, tolerance, "detected \(detected)Hz, expected close to \(frequency)Hz", file: file, line: line)
     }
@@ -113,13 +123,59 @@ final class PitchMathTests: XCTestCase {
         )
         // Medium preserves the behavior the detector had before the setting existed.
         XCTAssertEqual(PitchDetector.Sensitivity.medium.minimumRMS, PitchMath.defaultMinimumRMS)
+
+        // All five levels, on both knobs, must move monotonically with the
+        // label. YIN's threshold runs the other way from the amplitude gate —
+        // more sensitive means a *higher* aperiodicity tolerance but a *lower*
+        // loudness floor — which is exactly the kind of thing to wire backwards.
+        let ordered = PitchDetector.Sensitivity.allCases
+        XCTAssertEqual(ordered.count, 5)
+        for (a, b) in zip(ordered, ordered.dropFirst()) {
+            XCTAssertLessThan(a.yinThreshold, b.yinThreshold, "\(a.label) -> \(b.label)")
+            XCTAssertGreaterThan(a.minimumRMS, b.minimumRMS, "\(a.label) -> \(b.label)")
+        }
     }
 
     func testMinimumRMSGatesDetection() {
         // A quiet tone: detected when the gate is permissive, rejected when not.
         let quiet = (0..<4410).map { Float(0.02 * sin(2 * Double.pi * 440 * Double($0) / sampleRate)) }
-        XCTAssertNotNil(PitchMath.autoCorrelate(quiet, sampleRate: sampleRate, minimumRMS: 0.003))
-        XCTAssertNil(PitchMath.autoCorrelate(quiet, sampleRate: sampleRate, minimumRMS: 0.030))
+        XCTAssertNotNil(PitchMath.yin(quiet, sampleRate: sampleRate, minimumRMS: 0.003))
+        XCTAssertNil(PitchMath.yin(quiet, sampleRate: sampleRate, minimumRMS: 0.030))
+    }
+
+    /// The reason for moving to YIN. A bowed string's fundamental is often
+    /// weaker than its overtones; plain autocorrelation reports the stronger
+    /// partial and lands an octave (or a twelfth) high.
+    func testTracksFundamentalWhenOvertonesDominate() {
+        for fundamental in [196.0, 293.66, 440.0] {
+            let n = 4410
+            var buffer = (0..<n).map { i -> Float in
+                let t = Double(i) / sampleRate
+                return Float(
+                    0.25 * sin(2 * Double.pi * fundamental * t)       // weak fundamental
+                    + 1.00 * sin(2 * Double.pi * 2 * fundamental * t)
+                    + 0.80 * sin(2 * Double.pi * 3 * fundamental * t)
+                    + 0.50 * sin(2 * Double.pi * 4 * fundamental * t)
+                )
+            }
+            let peak = buffer.map { abs($0) }.max() ?? 1
+            buffer = buffer.map { $0 / peak * 0.8 }
+
+            guard let estimate = PitchMath.yin(buffer, sampleRate: sampleRate) else {
+                XCTFail("no pitch detected for \(fundamental)Hz timbre")
+                continue
+            }
+            let ratio = estimate.frequency / fundamental
+            XCTAssertEqual(ratio, 1.0, accuracy: 0.01, "expected the fundamental, got ratio \(ratio)")
+        }
+    }
+
+    func testThresholdControlsStrictness() {
+        // Ordering is the invariant: a stricter threshold must never accept
+        // something a looser one rejected.
+        let tone = generateSineWave(frequency: 440, seconds: 0.1)
+        XCTAssertNotNil(PitchMath.yin(tone, sampleRate: sampleRate, threshold: 0.05))
+        XCTAssertNotNil(PitchMath.yin(tone, sampleRate: sampleRate, threshold: 0.35))
     }
 
     // MARK: - cents(from:to:)

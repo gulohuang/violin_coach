@@ -42,6 +42,9 @@ struct ScoreUnavailableView: View {
 struct ScoreCanvasView: View {
     let score: Score
     let currentPlayableIndex: Int
+    /// Called with the playable-note index when the score is tapped. Nil makes
+    /// the score non-interactive, which is what the player tab wants.
+    var onSelectNote: ((Int) -> Void)?
 
     private let metrics = ScoreRenderer.Metrics()
 
@@ -76,6 +79,19 @@ struct ScoreCanvasView: View {
                     )
                 }
                 .frame(width: size.width, height: size.height)
+                // Hit-testing runs off the same row arithmetic the renderer
+                // uses, so no formatted layout has to escape the draw closure.
+                .contentShape(Rectangle())
+                .onTapGesture { location in
+                    guard let onSelectNote else { return }
+                    guard let index = ScoreRenderer.playableIndex(
+                        at: location,
+                        score: score,
+                        availableWidth: geo.size.width,
+                        metrics: metrics
+                    ) else { return }
+                    onSelectNote(index)
+                }
             }
         }
         .background(
