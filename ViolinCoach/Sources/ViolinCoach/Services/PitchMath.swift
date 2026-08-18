@@ -10,10 +10,11 @@ import Foundation
 public enum PitchMath {
     private static let noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
-    /// Signal below this RMS is treated as silence and not analyzed. This is
-    /// the knob behind the tuner's sensitivity setting — see
-    /// `PitchDetector.Sensitivity`.
-    public static let defaultMinimumRMS = 0.01
+    /// Signal below this RMS is treated as silence and not analyzed. Kept in
+    /// step with `PitchDetector.Sensitivity.medium.minimumRMS`. It is only a
+    /// cheap early-out: `minimumClarity` is what decides whether a reading is
+    /// a note.
+    public static let defaultMinimumRMS = 0.004
 
     /// Root-mean-square amplitude of the analysis window, 0...1 for normalized
     /// float samples. Drives the input level meter, and is what

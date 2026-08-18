@@ -51,13 +51,20 @@ public final class PitchDetector: ObservableObject {
         }
 
         /// Amplitude floor, applied before the expensive analysis.
+        ///
+        /// Deliberately low across the board — roughly 6-8dB below where these
+        /// started. Since `minimumClarity` now does the real filtering, this
+        /// only needs to skip buffers not worth analyzing at all; setting it
+        /// high just makes the detector deaf to quiet playing for no benefit.
+        /// The cost of lowering it is CPU on near-silent buffers, which the
+        /// drop-if-busy backpressure already bounds.
         public var minimumRMS: Double {
             switch self {
-            case .lowest: return 0.030
-            case .low: return 0.020
-            case .medium: return PitchMath.defaultMinimumRMS // 0.01
-            case .high: return 0.005
-            case .highest: return 0.002
+            case .lowest: return 0.015   // -36.5 dBFS
+            case .low: return 0.008      // -42 dBFS
+            case .medium: return PitchMath.defaultMinimumRMS // 0.004, -48 dBFS
+            case .high: return 0.002     // -54 dBFS
+            case .highest: return 0.001  // -60 dBFS, the meter floor
             }
         }
 
