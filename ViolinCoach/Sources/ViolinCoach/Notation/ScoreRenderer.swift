@@ -54,6 +54,11 @@ public enum ScoreRenderer {
     /// exactly what happened before this constant existed.
     static let staveExtentInSpaces: Double = 13
 
+    /// Tint behind bars chosen for repeat practice. A CSS string because
+    /// VexFoundation's `RenderContext` takes CSS colors; drawn over the
+    /// always-light score paper, so it only needs a light-mode value.
+    static let sectionHighlightCSS = "rgba(52, 92, 217, 0.08)"
+
     public struct Metrics {
         /// Distance between staff lines. VexFlow's default is
         /// `Tables.STAVE_LINE_DISTANCE` (10); a little more reads better on a
@@ -203,10 +208,13 @@ public enum ScoreRenderer {
     /// Draws `score` into `context` and returns the resulting layout. Call
     /// this from inside a `VexCanvas` draw closure.
     @discardableResult
+    /// - Parameter highlightMeasures: measure numbers to tint, marking a
+    ///   section chosen for repeat practice.
     public static func draw(
         score: Score,
         into context: RenderContext,
         availableWidth: Double,
+        highlightMeasures: ClosedRange<Int>? = nil,
         metrics: Metrics = Metrics()
     ) -> ScoreLayout {
         FontLoader.loadDefaultFonts()
@@ -244,11 +252,15 @@ public enum ScoreRenderer {
                 + Double(column) * measureWidth
             let y = metrics.topMargin + Double(row) * (metrics.rowHeight + metrics.rowGap)
 
-            let stave = factory.Stave(
-                x: x,
-                y: y,
-                width: measureWidth + (isRowStart ? rowPrefix : 0)
-            )
+            let staveWidth = measureWidth + (isRowStart ? rowPrefix : 0)
+            let stave = factory.Stave(x: x, y: y, width: staveWidth)
+
+            // Tint the selected bars. Drawn before the stave so the notation
+            // sits on top of it rather than being washed out.
+            if let highlightMeasures, highlightMeasures.contains(measure.number) {
+                _ = context.setFillStyle(sectionHighlightCSS)
+                _ = context.fillRect(x, y, staveWidth, metrics.rowHeight)
+            }
 
             if isRowStart {
                 _ = stave.addClef(.treble)

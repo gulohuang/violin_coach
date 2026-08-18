@@ -33,9 +33,12 @@ struct PracticeView: View {
                 ScoreCanvasView(
                     score: score,
                     currentPlayableIndex: viewModel.currentIndex,
-                    onSelectNote: { viewModel.moveCursor(to: $0) }
+                    onSelectNote: { viewModel.moveCursor(to: $0) },
+                    highlightMeasures: viewModel.sectionMeasures
                 )
                 .frame(maxHeight: .infinity)
+
+                sectionBar
                 ScoreProgressBar(
                     current: viewModel.currentIndex,
                     total: score.playableNotes.count
@@ -46,7 +49,9 @@ struct PracticeView: View {
                 isActive: viewModel.isActive,
                 isComplete: viewModel.isComplete,
                 direction: viewModel.direction,
-                expectedNoteLabel: viewModel.expectedNoteLabel
+                expectedNoteLabel: viewModel.expectedNoteLabel,
+                holdProgress: viewModel.holdProgress,
+                requiredHold: viewModel.requiredHold
             )
 
             Button {
@@ -69,6 +74,57 @@ struct PracticeView: View {
         .padding(.horizontal, Theme.Spacing.lg)
         .padding(.top, Theme.Spacing.md)
     }
+
+    /// Section picker. Selecting is two taps on the score, so the button only
+    /// arms and disarms that mode — and doubles as the way to clear a section
+    /// once one is set.
+    private var sectionBar: some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            Button {
+                viewModel.toggleSectionSelection()
+            } label: {
+                Label(sectionButtonTitle, systemImage: sectionButtonIcon)
+                    .font(.subheadline.weight(.medium))
+                    .padding(.horizontal, Theme.Spacing.md)
+                    .padding(.vertical, Theme.Spacing.sm)
+                    .background(
+                        Capsule().fill(
+                            viewModel.isSelectingSection
+                                ? Theme.Palette.accent.opacity(0.16)
+                                : Theme.Palette.cardSurface
+                        )
+                    )
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(viewModel.isSelectingSection ? Theme.Palette.accent : .primary)
+
+            if let label = viewModel.sectionLabel {
+                Text(viewModel.loopCount > 0 ? "\(label) · loop \(viewModel.loopCount + 1)" : label)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Theme.Palette.accent)
+            } else if viewModel.isSelectingSection {
+                Text(viewModel.pendingSectionStart == nil
+                     ? "Tap the first bar"
+                     : "Tap the last bar")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+        }
+        .animation(Theme.Motion.gentle, value: viewModel.isSelectingSection)
+        .animation(Theme.Motion.gentle, value: viewModel.sectionMeasures)
+    }
+
+    private var sectionButtonTitle: String {
+        if viewModel.isSelectingSection { return "Cancel" }
+        return viewModel.sectionMeasures == nil ? "Select Section" : "Whole Piece"
+    }
+
+    private var sectionButtonIcon: String {
+        if viewModel.isSelectingSection { return "xmark" }
+        return viewModel.sectionMeasures == nil ? "square.dashed" : "arrow.counterclockwise"
+    }
 }
 
 /// Live pitch feedback. Direction is carried by an arrow, a word, *and*
@@ -79,6 +135,9 @@ private struct FeedbackCard: View {
     let isComplete: Bool
     let direction: PitchDirection?
     let expectedNoteLabel: String
+    /// 0...1 through the sustain required for this note.
+    let holdProgress: Double
+    let requiredHold: TimeInterval
 
     private var accent: Color {
         switch direction {
@@ -119,6 +178,26 @@ private struct FeedbackCard: View {
                     Capsule().fill(accent.opacity(0.12))
                 )
                 .animation(Theme.Motion.gentle, value: direction)
+
+                // How much of the note's length still has to be sustained.
+                // Without this, waiting out a half note is indistinguishable
+                // from the app having stopped responding.
+                VStack(spacing: Theme.Spacing.xs) {
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(Theme.Palette.idle.opacity(0.22))
+                            Capsule()
+                                .fill(Theme.Palette.inTune)
+                                .frame(width: max(0, min(1, holdProgress)) * geo.size.width)
+                        }
+                    }
+                    .frame(height: 6)
+
+                    Text(String(format: "hold %.1fs", requiredHold))
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, Theme.Spacing.lg)
             } else {
                 Image(systemName: "waveform")
                     .font(.system(size: 36))

@@ -243,9 +243,15 @@ Simulator audio input is often silent by default — check
 - Comments explain *why*, not *what*. Existing comments document the reasoning
   behind non-obvious choices (why autocorrelation, why per-measure staves,
   why the tolerance values are what they are) — match that.
-- Practice-mode tolerances (`PracticeViewModel`): ±38 cents, 3 consecutive
-  in-tune readings before advancing. Loose enough for bow/vibrato wobble,
-  tight enough to mean something, fast enough to feel responsive. Change
-  these only with a reason.
+- Practice-mode tolerances (`PracticeViewModel`): ±38 cents, and the note must
+  be *sustained* for `0.6 ×` its written duration, clamped to 0.18–1.2s. Pitch
+  alone let you skate through a slow passage at any speed; the clamp keeps
+  sixteenths responsive and stops a whole note becoming a stamina test.
+  Change these only with a reason.
+- **The hold clock runs on a timer, not on pitch readings.** `PitchDetector`
+  suppresses readings identical to the last one, so a perfectly steady note
+  stops publishing — checking the hold only when a reading arrives would mean
+  it never completes. `PracticeViewModel` ticks at 20Hz while active, which
+  also keeps the hold progress bar smooth between readings.
 - New Service code: keep pure logic separable from AVFoundation so it stays
   testable without hardware.
