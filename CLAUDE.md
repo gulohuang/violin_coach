@@ -160,7 +160,7 @@ violin_coach/
 │   │   ├── Notation/ScoreRenderer.swift
 │   │   ├── ViewModels/          # Tuner, ScorePlayer, Practice
 │   │   ├── Views/               # ContentView (TabView) + 3 tabs + ScoreCanvasView
-│   │   └── Resources/twinkle-twinkle.musicxml
+│   │   └── Resources/gavotte.musicxml
 │   └── Tests/ViolinCoachTests/  # XCTest — NEVER RUN, see above
 └── app/                         # web prototype (VERIFIED: builds, 12 tests pass)
     └── src/lib/                 # pitchDetection.ts + .test.ts — the reference
@@ -233,8 +233,16 @@ Simulator audio input is often silent by default — check
 - **Accidentals always spell as sharps** (F♯, never G♭). Correct key-aware
   enharmonic spelling is a real feature, not yet built.
 - **No auto-scroll to cursor** — the score scrolls by hand.
-- **One bundled score.** A file-import flow on top of
-  `MusicXMLParser.parse(contentsOf:)` is the natural next step.
+- **One bundled score** — Gavotte (P. Martini), 89 bars of single-voice
+  violin, extracted from its `.mxl` (a zip container) at authoring time. The
+  parser reads plain MusicXML only; `.mxl` support would mean adding archive
+  handling. A file-import flow on top of `MusicXMLParser.parse(contentsOf:)`
+  is the natural next step.
+- **Never set a fill or stroke style before `factory.draw()`.** The render
+  context is stateful, so a style set while laying out staves is still current
+  when VexFoundation engraves the notation and will tint the noteheads with
+  it. A section highlight drawn that way made every note translucent blue.
+  Draw overlays *after* `factory.draw()`, wrapped in `save()`/`restore()`.
 - **Synthesized tone, not sampled violin** — a harmonic stack with an
   envelope, chosen to keep the app dependency-free and small.
 

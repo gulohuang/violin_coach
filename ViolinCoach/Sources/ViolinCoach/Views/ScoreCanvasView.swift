@@ -45,8 +45,8 @@ struct ScoreCanvasView: View {
     /// Called with the playable-note index when the score is tapped. Nil makes
     /// the score non-interactive, which is what the player tab wants.
     var onSelectNote: ((Int) -> Void)?
-    /// Bars to tint as a chosen practice section.
-    var highlightMeasures: ClosedRange<Int>?
+    /// Bars chosen for repeat practice, marked with a bracket at each end.
+    var sectionMeasures: ClosedRange<Int>?
 
     private let metrics = ScoreRenderer.Metrics()
 
@@ -64,7 +64,7 @@ struct ScoreCanvasView: View {
                         score: score,
                         into: context,
                         availableWidth: geo.size.width,
-                        highlightMeasures: highlightMeasures,
+                        sectionMeasures: sectionMeasures,
                         metrics: metrics
                     )
                     guard currentPlayableIndex >= 0,

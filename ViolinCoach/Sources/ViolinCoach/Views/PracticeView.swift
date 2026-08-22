@@ -34,7 +34,7 @@ struct PracticeView: View {
                     score: score,
                     currentPlayableIndex: viewModel.currentIndex,
                     onSelectNote: { viewModel.moveCursor(to: $0) },
-                    highlightMeasures: viewModel.sectionMeasures
+                    sectionMeasures: viewModel.sectionMeasures
                 )
                 .frame(maxHeight: .infinity)
 

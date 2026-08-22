@@ -54,10 +54,10 @@ public enum ScoreRenderer {
     /// exactly what happened before this constant existed.
     static let staveExtentInSpaces: Double = 13
 
-    /// Tint behind bars chosen for repeat practice. A CSS string because
-    /// VexFoundation's `RenderContext` takes CSS colors; drawn over the
-    /// always-light score paper, so it only needs a light-mode value.
-    static let sectionHighlightCSS = "rgba(52, 92, 217, 0.08)"
+    /// Colour of the brackets marking a chosen practice section. A CSS string
+    /// because VexFoundation's `RenderContext` takes CSS colors; drawn over
+    /// the always-light score paper, so it only needs a light-mode value.
+    static let sectionBracketCSS = "rgba(52, 92, 217, 0.95)"
 
     public struct Metrics {
         /// Distance between staff lines. VexFlow's default is
@@ -208,13 +208,13 @@ public enum ScoreRenderer {
     /// Draws `score` into `context` and returns the resulting layout. Call
     /// this from inside a `VexCanvas` draw closure.
     @discardableResult
-    /// - Parameter highlightMeasures: measure numbers to tint, marking a
-    ///   section chosen for repeat practice.
+    /// - Parameter sectionMeasures: bars chosen for repeat practice, marked
+    ///   with a bracket at each end of the range.
     public static func draw(
         score: Score,
         into context: RenderContext,
         availableWidth: Double,
-        highlightMeasures: ClosedRange<Int>? = nil,
+        sectionMeasures: ClosedRange<Int>? = nil,
         metrics: Metrics = Metrics()
     ) -> ScoreLayout {
         FontLoader.loadDefaultFonts()
@@ -229,6 +229,8 @@ public enum ScoreRenderer {
         let keyName = keyNames[score.fifths] ?? "C"
         var positions: [RenderedNotePosition] = []
         var playableIndex = 0
+        var sectionOpen: (x: Double, top: Double, bottom: Double)?
+        var sectionClose: (x: Double, top: Double, bottom: Double)?
 
         for (measureIndex, measure) in measures.enumerated() {
             let row = measureIndex / plan.measuresPerRow
@@ -254,13 +256,6 @@ public enum ScoreRenderer {
 
             let staveWidth = measureWidth + (isRowStart ? rowPrefix : 0)
             let stave = factory.Stave(x: x, y: y, width: staveWidth)
-
-            // Tint the selected bars. Drawn before the stave so the notation
-            // sits on top of it rather than being washed out.
-            if let highlightMeasures, highlightMeasures.contains(measure.number) {
-                _ = context.setFillStyle(sectionHighlightCSS)
-                _ = context.fillRect(x, y, staveWidth, metrics.rowHeight)
-            }
 
             if isRowStart {
                 _ = stave.addClef(.treble)
@@ -318,6 +313,19 @@ public enum ScoreRenderer {
             let staffTop = stave.getYForLine(0)
             let staffBottom = stave.getYForLine(4)
 
+            // Note where the section's brackets go. Drawing has to wait until
+            // after factory.draw(), because any fill or stroke style set here
+            // would still be current when VexFoundation renders the notation
+            // and would tint the noteheads with it.
+            if let sectionMeasures {
+                if measure.number == sectionMeasures.lowerBound {
+                    sectionOpen = (x, staffTop, staffBottom)
+                }
+                if measure.number == sectionMeasures.upperBound {
+                    sectionClose = (x + staveWidth, staffTop, staffBottom)
+                }
+            }
+
             for (i, staveNote) in staveNotes.enumerated() {
                 guard let pIndex = staveNotePlayableIndex[i] else { continue }
                 positions.append(RenderedNotePosition(
@@ -331,7 +339,44 @@ public enum ScoreRenderer {
 
         try? factory.draw()
 
+        // After the notation, so the bracket's stroke style can't bleed into it.
+        if let sectionOpen {
+            drawSectionBracket(context, x: sectionOpen.x, top: sectionOpen.top, bottom: sectionOpen.bottom, opening: true, metrics: metrics)
+        }
+        if let sectionClose {
+            drawSectionBracket(context, x: sectionClose.x, top: sectionClose.top, bottom: sectionClose.bottom, opening: false, metrics: metrics)
+        }
+
         return ScoreLayout(totalWidth: size.width, totalHeight: size.height, notePositions: positions)
+    }
+
+    /// A square bracket marking one end of the practice section — the shape
+    /// printed music uses for a repeated span, rather than a wash of colour
+    /// that would fight with the notation.
+    private static func drawSectionBracket(
+        _ context: RenderContext,
+        x: Double,
+        top: Double,
+        bottom: Double,
+        opening: Bool,
+        metrics: Metrics
+    ) {
+        let overhang = metrics.staveSpace * 1.2   // reach past the staff lines
+        let arm = metrics.staveSpace * 1.1        // length of the horizontal feet
+        let y0 = top - overhang
+        let y1 = bottom + overhang
+        let armEnd = opening ? x + arm : x - arm
+
+        _ = context.save()
+        _ = context.setStrokeStyle(sectionBracketCSS)
+        _ = context.setLineWidth(2.5)
+        _ = context.beginPath()
+        _ = context.moveTo(armEnd, y0)
+        _ = context.lineTo(x, y0)
+        _ = context.lineTo(x, y1)
+        _ = context.lineTo(armEnd, y1)
+        _ = context.stroke()
+        _ = context.restore()
     }
 
     // MARK: - MusicXML -> VexFoundation mapping

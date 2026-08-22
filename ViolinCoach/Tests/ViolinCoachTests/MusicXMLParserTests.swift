@@ -108,7 +108,7 @@ final class MusicXMLParserTests: XCTestCase {
         XCTAssertThrowsError(try MusicXMLParser.parse(data: emptyXML.data(using: .utf8)!))
     }
 
-    // Loading the actual bundled twinkle-twinkle.musicxml resource is exercised
+    // Loading the actual bundled gavotte.musicxml resource is exercised
     // manually via the app (ScorePlayerViewModel/PracticeViewModel surface a
     // visible error if it fails to load) rather than here — whether a unit
     // test target can see the app target's bundled resources depends on
