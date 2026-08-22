@@ -31,6 +31,38 @@ final class ScoreRendererSpellingTests: XCTestCase {
         XCTAssertEqual(ScoreRenderer.staffKeySpec(forMidi: 60).key.rawValue, "c/4")
     }
 
+    // MARK: - Key-signature-aware accidentals
+
+    /// The bug this prevents: deriving accidentals from alteration alone put a
+    /// sharp on all 40 F naturals in the Gavotte, which is in G major.
+    func testAccidentalOmittedWhenTheKeySignatureAlreadyCoversIt() {
+        // G major: one sharp, on F.
+        XCTAssertEqual(ScoreRenderer.keySignatureAlter(forStep: "F", fifths: 1), 1)
+        XCTAssertEqual(ScoreRenderer.keySignatureAlter(forStep: "C", fifths: 1), 0)
+        // F major: one flat, on B.
+        XCTAssertEqual(ScoreRenderer.keySignatureAlter(forStep: "B", fifths: -1), -1)
+        XCTAssertEqual(ScoreRenderer.keySignatureAlter(forStep: "E", fifths: -1), 0)
+        // C major alters nothing.
+        XCTAssertEqual(ScoreRenderer.keySignatureAlter(forStep: "F", fifths: 0), 0)
+    }
+
+    func testNaturalCancellingTheKeySignatureStillPrints() {
+        // An F natural in G major departs from the key and must show a natural.
+        let fifths = 1
+        XCTAssertNotEqual(0, ScoreRenderer.keySignatureAlter(forStep: "F", fifths: fifths))
+        XCTAssertEqual(ScoreRenderer.accidentalType(forAlter: 0), .natural)
+    }
+
+    func testWrittenSpellingIsPreserved() {
+        // B-flat must stay on the B line with a flat, not become A-sharp.
+        let bFlat = ScoreRenderer.staffKeySpec(step: "B", alter: -1, octave: 4)
+        XCTAssertEqual(bFlat.rawValue, "bb/4")
+        let fSharp = ScoreRenderer.staffKeySpec(step: "F", alter: 1, octave: 4)
+        XCTAssertEqual(fSharp.rawValue, "f#/4")
+        let natural = ScoreRenderer.staffKeySpec(step: "G", alter: 0, octave: 3)
+        XCTAssertEqual(natural.rawValue, "g/3")
+    }
+
     // MARK: - Tap-to-move hit testing
 
     /// 11 measures of four quarter notes, shaped like the bundled sample.

@@ -91,6 +91,13 @@ public final class MusicXMLParser: NSObject, XMLParserDelegate {
     private var noteDuration: Double?
     private var noteType = "quarter"
     private var noteDots = 0
+    private var noteArticulations: [Articulation] = []
+    private var noteBeam: BeamRole?
+    private var noteSlur: SlurRole?
+    private var noteFingering: String?
+    /// Dynamics arrive in a <direction> *before* the note they apply to, so
+    /// they're held here until the next note claims them.
+    private var pendingDynamic: String?
 
     // MARK: - XMLParserDelegate
 
@@ -126,6 +133,10 @@ public final class MusicXMLParser: NSObject, XMLParserDelegate {
             noteDuration = nil
             noteType = "quarter"
             noteDots = 0
+            noteArticulations = []
+            noteBeam = nil
+            noteSlur = nil
+            noteFingering = nil
         case "rest":
             if inNote { noteIsRest = true }
         case "chord":
@@ -136,6 +147,33 @@ public final class MusicXMLParser: NSObject, XMLParserDelegate {
             if let tempoStr = attributeDict["tempo"], let tempo = Double(tempoStr), tempo > 0 {
                 tempoBPM = tempo
             }
+
+        // Articulations and bowings are empty elements inside <notations>,
+        // so they're caught on open rather than close.
+        case "staccato": if inNote { noteArticulations.append(.staccato) }
+        case "staccatissimo": if inNote { noteArticulations.append(.staccatissimo) }
+        case "accent": if inNote { noteArticulations.append(.accent) }
+        case "tenuto": if inNote { noteArticulations.append(.tenuto) }
+        case "strong-accent": if inNote { noteArticulations.append(.marcato) }
+        case "fermata": if inNote { noteArticulations.append(.fermata) }
+        case "up-bow": if inNote { noteArticulations.append(.upBow) }
+        case "down-bow": if inNote { noteArticulations.append(.downBow) }
+
+        case "slur":
+            if inNote, let type = attributeDict["type"] {
+                switch (type, noteSlur) {
+                // A note can close one slur and open the next.
+                case ("start", .stop), ("stop", .start): noteSlur = .stopStart
+                case ("start", _): noteSlur = .start
+                case ("stop", _): noteSlur = .stop
+                default: break
+                }
+            }
+
+        // Dynamics are empty elements named for the marking itself:
+        // <dynamics><mf/></dynamics>.
+        case "p", "pp", "ppp", "mp", "mf", "f", "ff", "fff", "sf", "sfz", "fp":
+            if parentOfCurrent == "dynamics" { pendingDynamic = elementName }
         default:
             break
         }
@@ -181,6 +219,12 @@ public final class MusicXMLParser: NSObject, XMLParserDelegate {
             if inNote, let value = Double(text) { noteDuration = value }
         case "type":
             if inNote, parentOfCurrent == "note" { noteType = text }
+        case "beam":
+            // MusicXML numbers beams by level; level 1 is the primary beam and
+            // is all this renderer groups on.
+            if inNote, noteBeam == nil { noteBeam = BeamRole(rawValue: text) }
+        case "fingering":
+            if inNote, !text.isEmpty { noteFingering = text }
         case "note":
             if isFirstPart { finishNote() }
             inNote = false
@@ -204,7 +248,8 @@ public final class MusicXMLParser: NSObject, XMLParserDelegate {
             notes.append(ScoreNote(
                 id: nextNoteId, isRest: true, midi: 0,
                 beatsInQuarters: beats, typeName: noteType, dots: noteDots,
-                measureNumber: currentMeasureNumber
+                measureNumber: currentMeasureNumber,
+                articulations: noteArticulations
             ))
             nextNoteId += 1
             return
@@ -214,9 +259,16 @@ public final class MusicXMLParser: NSObject, XMLParserDelegate {
               let midi = Self.midiNumber(step: step, alter: noteAlter, octave: octave) else { return }
         notes.append(ScoreNote(
             id: nextNoteId, isRest: false, midi: midi,
+            step: step.uppercased(), alter: noteAlter, octave: octave,
             beatsInQuarters: beats, typeName: noteType, dots: noteDots,
-            measureNumber: currentMeasureNumber
+            measureNumber: currentMeasureNumber,
+            articulations: noteArticulations,
+            beam: noteBeam,
+            slur: noteSlur,
+            fingering: noteFingering,
+            dynamic: pendingDynamic
         ))
+        pendingDynamic = nil
         nextNoteId += 1
     }
 

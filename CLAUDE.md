@@ -230,8 +230,11 @@ Simulator audio input is often silent by default — check
 - **Ties are not merged**: a note tied across a barline becomes two attacks.
   Correct visually, slightly wrong for practice timing on tied pieces.
 - **Grace notes are skipped** (no `<duration>` element).
-- **Accidentals always spell as sharps** (F♯, never G♭). Correct key-aware
-  enharmonic spelling is a real feature, not yet built.
+- **Accidentals follow the written spelling and the key signature.**
+  `ScoreNote` keeps `step`/`alter` from the MusicXML alongside `midi`, because
+  MIDI alone cannot tell B♭ from A♯. An accidental prints only where the note
+  departs from the key signature — deriving it from `alter` alone put a sharp
+  on all 40 F naturals in the Gavotte, which is in G major.
 - **No auto-scroll to cursor** — the score scrolls by hand.
 - **One bundled score** — Gavotte (P. Martini), 89 bars of single-voice
   violin, extracted from its `.mxl` (a zip container) at authoring time. The
@@ -243,6 +246,12 @@ Simulator audio input is often silent by default — check
   when VexFoundation engraves the notation and will tint the noteheads with
   it. A section highlight drawn that way made every note translucent blue.
   Draw overlays *after* `factory.draw()`, wrapped in `save()`/`restore()`.
+- **Notation rendered**: beams, slurs, staccato/staccatissimo/accent/tenuto/
+  marcato/fermata, up- and down-bow, left-hand fingerings, and dynamics.
+  **Still dropped**: hairpins (`<wedge>`), text directions (`<words>`),
+  breath marks, and non-primary beam levels. Notation lives on `ScoreNote`
+  but never feeds practice or playback — those read only `midi` and
+  `beatsInQuarters`, so engraving can change without touching either.
 - **Synthesized tone, not sampled violin** — a harmonic stack with an
   envelope, chosen to keep the app dependency-free and small.
 

@@ -59,6 +59,9 @@ public enum ScoreRenderer {
     /// the always-light score paper, so it only needs a light-mode value.
     static let sectionBracketCSS = "rgba(52, 92, 217, 0.95)"
 
+    /// Dynamics are conventionally set in bold italic serif.
+    static let dynamicsFont = FontInfo(family: "Times New Roman", size: 12, weight: "bold", style: "italic")
+
     public struct Metrics {
         /// Distance between staff lines. VexFlow's default is
         /// `Tables.STAVE_LINE_DISTANCE` (10); a little more reads better on a
@@ -231,6 +234,10 @@ public enum ScoreRenderer {
         var playableIndex = 0
         var sectionOpen: (x: Double, top: Double, bottom: Double)?
         var sectionClose: (x: Double, top: Double, bottom: Double)?
+        // Slurs routinely run across a barline, so their endpoints are
+        // resolved after every measure has been built rather than within one.
+        var openSlurNotes: [StaveNote] = []
+        var slurPairs: [(from: StaveNote, to: StaveNote)] = []
 
         for (measureIndex, measure) in measures.enumerated() {
             let row = measureIndex / plan.measuresPerRow
@@ -285,18 +292,70 @@ public enum ScoreRenderer {
                     continue
                 }
 
-                let pitch = Self.staffKeySpec(forMidi: note.midi)
+                // Spelled from what the composer wrote, not derived from MIDI:
+                // MIDI cannot tell B-flat from A-sharp.
+                let key = Self.staffKeySpec(step: note.step, alter: note.alter, octave: note.octave)
                 let staveNote = factory.StaveNote(StaveNoteStruct(
-                    keys: NonEmptyArray(pitch.key),
+                    keys: NonEmptyArray(key),
                     duration: durationSpec,
                     dots: note.dots
                 ))
-                if let accidental = pitch.accidental {
+                // Print an accidental only where the note departs from the key
+                // signature. Printing one for every altered note would put a
+                // sharp on every F in G major.
+                if note.alter != Self.keySignatureAlter(forStep: note.step, fifths: score.fifths),
+                   let accidental = Self.accidentalType(forAlter: note.alter) {
                     _ = staveNote.addModifier(factory.Accidental(type: accidental), index: 0)
                 }
+                for articulation in note.articulations {
+                    _ = staveNote.addModifier(factory.Articulation(type: articulation.vexCode), index: 0)
+                }
+                if let fingering = note.fingering {
+                    _ = staveNote.addModifier(factory.Fingering(number: fingering, position: .left), index: 0)
+                }
+                if let dynamic = note.dynamic {
+                    _ = staveNote.addModifier(
+                        factory.Annotation(text: dynamic, vJustify: .bottom, font: dynamicsFont),
+                        index: 0
+                    )
+                }
+
+                switch note.slur {
+                case .start:
+                    openSlurNotes.append(staveNote)
+                case .stop:
+                    if let from = openSlurNotes.popLast() { slurPairs.append((from, staveNote)) }
+                case .stopStart:
+                    if let from = openSlurNotes.popLast() { slurPairs.append((from, staveNote)) }
+                    openSlurNotes.append(staveNote)
+                case nil:
+                    break
+                }
+
                 staveNotes.append(staveNote)
                 staveNotePlayableIndex.append(playableIndex)
                 playableIndex += 1
+            }
+
+            // Beam runs never cross a barline, so they close out per measure.
+            var beamGroup: [StaveNote] = []
+            for (i, note) in measure.notes.enumerated() where i < staveNotes.count {
+                switch note.beam {
+                case .begin:
+                    beamGroup = [staveNotes[i]]
+                case .continue:
+                    if !beamGroup.isEmpty { beamGroup.append(staveNotes[i]) }
+                case .end:
+                    if !beamGroup.isEmpty {
+                        beamGroup.append(staveNotes[i])
+                        if beamGroup.count >= 2 { _ = factory.Beam(notes: beamGroup) }
+                    }
+                    beamGroup = []
+                case nil:
+                    // An unbeamed note interrupts any run left dangling by
+                    // malformed input; a single note is not a beam.
+                    beamGroup = []
+                }
             }
 
             let voice = factory.Voice(timeSignature: .meter(score.beatsPerMeasure, score.beatType))
@@ -335,6 +394,12 @@ public enum ScoreRenderer {
                     staffBottomY: staffBottom
                 ))
             }
+        }
+
+        // Slurs are queued before drawing so VexFoundation renders them with
+        // the rest of the notation.
+        for pair in slurPairs {
+            _ = factory.Curve(from: pair.from, to: pair.to)
         }
 
         try? factory.draw()
@@ -393,6 +458,42 @@ public enum ScoreRenderer {
         case "128th": return .oneTwentyEighth
         default: return .quarter // unsupported/unknown type name — documented fallback
         }
+    }
+
+    /// Alteration the key signature already applies to a given letter, so the
+    /// renderer knows when an accidental is redundant.
+    static func keySignatureAlter(forStep step: String, fifths: Int) -> Int {
+        let sharpOrder = ["F", "C", "G", "D", "A", "E", "B"]
+        let flatOrder = ["B", "E", "A", "D", "G", "C", "F"]
+        let letter = step.uppercased()
+        if fifths > 0 { return sharpOrder.prefix(min(fifths, 7)).contains(letter) ? 1 : 0 }
+        if fifths < 0 { return flatOrder.prefix(min(-fifths, 7)).contains(letter) ? -1 : 0 }
+        return 0
+    }
+
+    static func accidentalType(forAlter alter: Int) -> AccidentalType? {
+        switch alter {
+        case 2: return .doubleSharp
+        case 1: return .sharp
+        case 0: return .natural
+        case -1: return .flat
+        case -2: return .doubleFlat
+        default: return nil
+        }
+    }
+
+    /// Builds a staff key from the written spelling.
+    static func staffKeySpec(step: String, alter: Int, octave: Int) -> StaffKeySpec {
+        let letter = NoteLetter(parsing: step) ?? .c
+        let accidental: StaffAccidental?
+        switch alter {
+        case 2: accidental = .doubleSharp
+        case 1: accidental = .sharp
+        case -1: accidental = .flat
+        case -2: accidental = .doubleFlat
+        default: accidental = nil
+        }
+        return StaffKeySpec(letter: letter, accidental: accidental, octave: octave)
     }
 
     private static let letters: [Character] = ["c", "d", "e", "f", "g", "a", "b"]

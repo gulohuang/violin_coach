@@ -108,6 +108,73 @@ final class MusicXMLParserTests: XCTestCase {
         XCTAssertThrowsError(try MusicXMLParser.parse(data: emptyXML.data(using: .utf8)!))
     }
 
+    // MARK: - Notation
+
+    static let notationXML = """
+    <?xml version="1.0" encoding="UTF-8"?>
+    <score-partwise version="3.1">
+      <part-list><score-part id="P1"><part-name>Violin</part-name></score-part></part-list>
+      <part id="P1">
+        <measure number="1">
+          <attributes>
+            <divisions>2</divisions>
+            <key><fifths>1</fifths></key>
+            <time><beats>4</beats><beat-type>4</beat-type></time>
+          </attributes>
+          <direction><direction-type><dynamics><mf/></dynamics></direction-type></direction>
+          <note>
+            <pitch><step>F</step><alter>1</alter><octave>4</octave></pitch>
+            <duration>1</duration><type>eighth</type>
+            <beam number="1">begin</beam>
+            <notations>
+              <slur number="1" type="start"/>
+              <articulations><staccato/><accent/></articulations>
+              <technical><up-bow/><fingering>2</fingering></technical>
+            </notations>
+          </note>
+          <note>
+            <pitch><step>B</step><alter>-1</alter><octave>4</octave></pitch>
+            <duration>1</duration><type>eighth</type>
+            <beam number="1">end</beam>
+            <notations><slur number="1" type="stop"/></notations>
+          </note>
+        </measure>
+      </part>
+    </score-partwise>
+    """
+
+    func testParsesArticulationsBowingsAndFingering() throws {
+        let score = try MusicXMLParser.parse(data: Self.notationXML.data(using: .utf8)!)
+        let first = score.notes[0]
+        XCTAssertEqual(Set(first.articulations), [.staccato, .accent, .upBow])
+        XCTAssertEqual(first.fingering, "2")
+    }
+
+    func testParsesBeamAndSlurRoles() throws {
+        let score = try MusicXMLParser.parse(data: Self.notationXML.data(using: .utf8)!)
+        XCTAssertEqual(score.notes[0].beam, .begin)
+        XCTAssertEqual(score.notes[1].beam, .end)
+        XCTAssertEqual(score.notes[0].slur, .start)
+        XCTAssertEqual(score.notes[1].slur, .stop)
+    }
+
+    /// Dynamics appear in a <direction> before the note they apply to.
+    func testDynamicAttachesToTheFollowingNote() throws {
+        let score = try MusicXMLParser.parse(data: Self.notationXML.data(using: .utf8)!)
+        XCTAssertEqual(score.notes[0].dynamic, "mf")
+        XCTAssertNil(score.notes[1].dynamic, "a dynamic applies once, not to every later note")
+    }
+
+    /// Written spelling has to survive, because MIDI cannot distinguish
+    /// B-flat from A-sharp and the score should print what was written.
+    func testKeepsWrittenSpellingNotJustMIDI() throws {
+        let score = try MusicXMLParser.parse(data: Self.notationXML.data(using: .utf8)!)
+        let bFlat = score.notes[1]
+        XCTAssertEqual(bFlat.step, "B")
+        XCTAssertEqual(bFlat.alter, -1)
+        XCTAssertEqual(bFlat.midi, 70) // same pitch as A#4
+    }
+
     // Loading the actual bundled gavotte.musicxml resource is exercised
     // manually via the app (ScorePlayerViewModel/PracticeViewModel surface a
     // visible error if it fails to load) rather than here — whether a unit
