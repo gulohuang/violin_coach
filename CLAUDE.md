@@ -3,6 +3,14 @@
 A lightweight iOS violin practice app: chromatic tuner, score playback with a
 following cursor, and note-by-note practice with real-time pitch feedback.
 
+**This repository also holds a second, unrelated app:** `FamilyCalendar/` — a
+wall-mounted iPad display showing one calendar per child, reachable without
+unlocking the device. It shares no code with ViolinCoach and has its own
+XcodeGen spec, tests and docs; start at
+[`FamilyCalendar/README.md`](FamilyCalendar/README.md) and
+[`FamilyCalendar/KIOSK-SETUP.md`](FamilyCalendar/KIOSK-SETUP.md). Everything
+else in this file is about ViolinCoach.
+
 ## ⚠️ Verification status — read this first
 
 **The native iOS app in `ViolinCoach/` has never been compiled, run, or
@@ -162,6 +170,12 @@ violin_coach/
 │   │   ├── Views/               # ContentView (TabView) + 3 tabs + ScoreCanvasView
 │   │   └── Resources/gavotte.musicxml
 │   └── Tests/ViolinCoachTests/  # XCTest — NEVER RUN, see above
+├── FamilyCalendar/              # the iPad wall display (UNVERIFIED — same caveat)
+│   ├── README.md                # architecture and decisions
+│   ├── KIOSK-SETUP.md           # the three iPad settings that make it a kiosk
+│   ├── project.yml              # XcodeGen spec → generates FamilyCalendar.xcodeproj
+│   ├── Sources/FamilyCalendar/  # Models / Services / ViewModels / Views
+│   └── Tests/FamilyCalendarTests/
 └── app/                         # web prototype (VERIFIED: builds, 12 tests pass)
     └── src/lib/                 # pitchDetection.ts + .test.ts — the reference
                                  # implementation the Swift port derives from

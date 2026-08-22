@@ -1,0 +1,88 @@
+# XcodeGen project spec. Generate the .xcodeproj with:
+#   brew install xcodegen   (one-time, on a Mac)
+#   xcodegen generate
+#
+# Same reasoning as ViolinCoach's spec: a pbxproj is a large generated format
+# meant for Xcode's GUI to edit, so we keep the diffable YAML and regenerate.
+name: FamilyCalendar
+options:
+  bundleIdPrefix: com.familycalendar
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+configs:
+  Debug: debug
+  Release: release
+targets:
+  FamilyCalendar:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/FamilyCalendar
+    info:
+      path: Sources/FamilyCalendar/Info.plist
+      properties:
+        UILaunchScreen: {}
+        # Every orientation: this iPad may be mounted either way round, and
+        # the layout adapts on its own.
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # Opting out of multitasking is part of the kiosk story: without it a
+        # child can drag another app in beside this one from the dock, which
+        # is exactly what Guided Access is there to prevent.
+        UIRequiresFullScreen: true
+        # iOS 16 and earlier read the first key; iOS 17 split read access out
+        # into the second and ignores the first. Both are needed to cover the
+        # deployment range.
+        NSCalendarsUsageDescription: >-
+          This display shows each child's calendar. It only reads events —
+          nothing is added, changed, or sent anywhere.
+        NSCalendarsFullAccessUsageDescription: >-
+          This display shows each child's calendar. It only reads events —
+          nothing is added, changed, or sent anywhere.
+    settings:
+      base:
+        # Bundle IDs are globally unique across all Apple developer accounts,
+        # so this must be namespaced to a domain/account you control.
+        # Override without editing this file:
+        #   xcodebuild ... PRODUCT_BUNDLE_IDENTIFIER=com.you.familycalendar
+        PRODUCT_BUNDLE_IDENTIFIER: com.gulohuang.familycalendar
+        SWIFT_VERSION: "6.0"
+        # iPad only — the layout assumes a wall-mounted display, and there is
+        # no phone-sized design for it.
+        TARGETED_DEVICE_FAMILY: "2"
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+  FamilyCalendarTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/FamilyCalendarTests
+    dependencies:
+      - target: FamilyCalendar
+    settings:
+      base:
+        SWIFT_VERSION: "6.0"
+schemes:
+  FamilyCalendar:
+    build:
+      targets:
+        FamilyCalendar: all
+        FamilyCalendarTests: [test]
+    run:
+      config: Debug
+      # Matches AppEnvironment.makeProvider(): a simulator has an empty
+      # Calendar database, so a plain Run would show two empty weeks.
+      commandLineArguments:
+        "--sample-events": true
+    test:
+      config: Debug
+      targets:
+        - FamilyCalendarTests
