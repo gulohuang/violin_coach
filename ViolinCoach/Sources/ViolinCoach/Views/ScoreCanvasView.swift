@@ -24,21 +24,20 @@ struct ScoreUnavailableView: View {
     }
 }
 
-/// Renders a `Score` with VexFoundation and highlights the note at
-/// `currentPlayableIndex` (matching `Score.playableNotes` numbering; -1 for
-/// no highlight). Shared by the Score Player and Practice tabs so both use
-/// the exact same rendering and cursor-highlight code.
+/// The score, wrapped onto rows that scroll vertically.
+///
+/// Each row is its own `Canvas` inside a `LazyVStack`, so only the rows on
+/// screen are engraved. Drawing the whole score into one tall canvas meant
+/// every scroll frame rebuilt every stave, note, beam and slur in the piece,
+/// which is what made scrolling stutter — and a cursor move redrew all of it
+/// too. Now a cursor move repaints one row.
 ///
 /// The canvas sits on a deliberately light "paper" surface in *both*
 /// appearances. `VexCanvas` is a transparent SwiftUI `Canvas` and
 /// VexFoundation engraves in black, so on a dark background the score would
 /// render invisible. Treating the staff as paper — which is what sheet music
-/// is — fixes that without having to restyle every stave and note for a
-/// second ink palette.
-///
-/// Measures wrap onto as many rows as the available width allows and the
-/// whole thing scrolls vertically, the way printed music reads. Auto-scrolling
-/// to keep the cursor on screen is still a follow-up (see CLAUDE.md).
+/// is — fixes that without restyling every stave and note for a second ink
+/// palette.
 struct ScoreCanvasView: View {
     let score: Score
     let currentPlayableIndex: Int
@@ -52,49 +51,46 @@ struct ScoreCanvasView: View {
 
     var body: some View {
         GeometryReader { geo in
-            let size = ScoreRenderer.canvasSize(
-                for: score,
-                availableWidth: geo.size.width,
-                metrics: metrics
-            )
-            ScrollView(.vertical, showsIndicators: false) {
-                VexCanvas(width: size.width, height: size.height) { context in
-                    context.clear()
-                    let layout = ScoreRenderer.draw(
-                        score: score,
-                        into: context,
-                        availableWidth: geo.size.width,
-                        sectionMeasures: sectionMeasures,
-                        metrics: metrics
-                    )
-                    guard currentPlayableIndex >= 0,
-                          let position = layout.notePositions.first(where: { $0.playableIndex == currentPlayableIndex })
-                    else { return }
+            let width = geo.size.width
+            let rowCount = ScoreRenderer.rowCount(for: score, availableWidth: width, metrics: metrics)
 
-                    let cursorWidth = 22.0
-                    let cursorPadding = 8.0
-                    _ = context.setFillStyle(Theme.Palette.scoreCursorCSS)
-                    _ = context.fillRect(
-                        position.x - cursorWidth / 2,
-                        position.staffTopY - cursorPadding,
-                        cursorWidth,
-                        position.staffBottomY - position.staffTopY + cursorPadding * 2
-                    )
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVStack(spacing: metrics.rowGap) {
+                    ForEach(0..<max(1, rowCount), id: \.self) { rowIndex in
+                        VexCanvas(width: width, height: metrics.rowHeight) { context in
+                            context.clear()
+                            ScoreRenderer.drawRow(
+                                score: score,
+                                rowIndex: rowIndex,
+                                into: context,
+                                availableWidth: width,
+                                cursorPlayableIndex: currentPlayableIndex >= 0 ? currentPlayableIndex : nil,
+                                sectionMeasures: sectionMeasures,
+                                metrics: metrics
+                            )
+                        }
+                        .frame(width: width, height: metrics.rowHeight)
+                        // Hit-testing runs off the same row arithmetic the
+                        // renderer uses, so no formatted layout has to escape
+                        // the draw closure. The tap's y is row-local, so it's
+                        // offset back into score space first.
+                        .contentShape(Rectangle())
+                        .onTapGesture { location in
+                            guard let onSelectNote else { return }
+                            let scoreY = metrics.topMargin
+                                + Double(rowIndex) * (metrics.rowHeight + metrics.rowGap)
+                                + location.y
+                            guard let index = ScoreRenderer.playableIndex(
+                                at: CGPoint(x: location.x, y: scoreY),
+                                score: score,
+                                availableWidth: width,
+                                metrics: metrics
+                            ) else { return }
+                            onSelectNote(index)
+                        }
+                    }
                 }
-                .frame(width: size.width, height: size.height)
-                // Hit-testing runs off the same row arithmetic the renderer
-                // uses, so no formatted layout has to escape the draw closure.
-                .contentShape(Rectangle())
-                .onTapGesture { location in
-                    guard let onSelectNote else { return }
-                    guard let index = ScoreRenderer.playableIndex(
-                        at: location,
-                        score: score,
-                        availableWidth: geo.size.width,
-                        metrics: metrics
-                    ) else { return }
-                    onSelectNote(index)
-                }
+                .padding(.vertical, metrics.topMargin)
             }
         }
         .background(
@@ -102,6 +98,12 @@ struct ScoreCanvasView: View {
                 .fill(Theme.Palette.paper)
         )
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
-        .shadow(color: .black.opacity(0.10), radius: 12, x: 0, y: 4)
+        .overlay(
+            // A hairline edge instead of a drop shadow: on the page-coloured
+            // card a shadow reads as a smudge, while a thin rule reads as the
+            // edge of a sheet of paper.
+            RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+                .strokeBorder(Color.black.opacity(0.10), lineWidth: 0.5)
+        )
     }
 }

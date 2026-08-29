@@ -83,43 +83,79 @@ final class ScoreRendererSpellingTests: XCTestCase {
     }
 
     /// Tapping the centre of each measure must land on a note in that measure.
-    /// This is the round-trip between `draw`'s placement and `playableIndex`'s
-    /// inverse of it — the two derive from shared arithmetic, and an off-by-one
-    /// in either would show up here.
+    /// This is the round-trip between the row plan's placement and
+    /// `playableIndex`'s inverse of it — both read the same `plan`, and an
+    /// off-by-one in either would show up here.
     func testTapOnEachMeasureResolvesToThatMeasure() {
         let score = makeScore()
         let metrics = ScoreRenderer.Metrics()
         let playable = score.playableNotes
+        let measures = score.measures
 
         for width in [345.0, 430.0] {
-            let plan = ScoreRenderer.rowPlan(
-                measureCount: score.measures.count,
+            let layout = ScoreRenderer.plan(
+                measures: measures,
                 availableWidth: width,
                 metrics: metrics
             )
-            for (i, measure) in score.measures.enumerated() {
-                let row = i / plan.measuresPerRow
-                let column = i % plan.measuresPerRow
-                let rowPrefix = metrics.rowPrefixWidth + (row == 0 ? metrics.firstRowExtraWidth : 0)
-                let measureWidth = (plan.contentWidth - rowPrefix) / Double(plan.measuresPerRow)
-                let x = metrics.horizontalMargin + rowPrefix + Double(column) * measureWidth + measureWidth / 2
-                let y = metrics.topMargin + Double(row) * (metrics.rowHeight + metrics.rowGap) + metrics.rowHeight / 2
+            for (rowIndex, row) in layout.rows.enumerated() {
+                for (column, measureIndex) in row.measureIndices.enumerated() {
+                    let measureWidth = row.widths[column]
+                    let preceding = row.widths.prefix(column).reduce(0, +)
+                    let x = metrics.horizontalMargin + row.prefixWidth + preceding + measureWidth / 2
+                    let y = metrics.topMargin
+                        + Double(rowIndex) * (metrics.rowHeight + metrics.rowGap)
+                        + metrics.rowHeight / 2
 
-                guard let index = ScoreRenderer.playableIndex(
-                    at: CGPoint(x: x, y: y),
-                    score: score,
-                    availableWidth: width,
-                    metrics: metrics
-                ) else {
-                    XCTFail("no note found for measure \(measure.number) at width \(width)")
-                    continue
+                    guard let index = ScoreRenderer.playableIndex(
+                        at: CGPoint(x: x, y: y),
+                        score: score,
+                        availableWidth: width,
+                        metrics: metrics
+                    ) else {
+                        XCTFail("no note found for measure \(measures[measureIndex].number) at width \(width)")
+                        continue
+                    }
+                    XCTAssertEqual(
+                        playable[index].measureNumber, measures[measureIndex].number,
+                        "tap on measure \(measures[measureIndex].number) resolved into \(playable[index].measureNumber) at width \(width)"
+                    )
                 }
-                XCTAssertEqual(
-                    playable[index].measureNumber, measure.number,
-                    "tap on measure \(measure.number) resolved into measure \(playable[index].measureNumber) at width \(width)"
-                )
             }
         }
+    }
+
+    /// A row must end exactly at the right margin, or the justification is
+    /// leaving a ragged edge.
+    func testRowsAreJustifiedFlush() {
+        let score = makeScore()
+        let metrics = ScoreRenderer.Metrics()
+        for width in [345.0, 430.0] {
+            let layout = ScoreRenderer.plan(measures: score.measures, availableWidth: width, metrics: metrics)
+            for row in layout.rows {
+                XCTAssertEqual(row.totalWidth, layout.contentWidth, accuracy: 0.01)
+            }
+        }
+    }
+
+    /// A bar with more notes must be given more room than a sparse one, which
+    /// is the point of packing by content rather than by count.
+    func testDenserMeasuresGetMoreWidth() {
+        let metrics = ScoreRenderer.Metrics()
+        let widths = ScoreRenderer.measureWidthsForTesting(noteCounts: [2, 6], available: 400, metrics: metrics)
+        XCTAssertGreaterThan(widths[1], widths[0])
+    }
+
+    /// Every measure has to land on exactly one row.
+    func testEveryMeasureIsPlacedExactlyOnce() {
+        let score = makeScore()
+        let layout = ScoreRenderer.plan(
+            measures: score.measures,
+            availableWidth: 345,
+            metrics: ScoreRenderer.Metrics()
+        )
+        let placed = layout.rows.flatMap(\.measureIndices)
+        XCTAssertEqual(placed.sorted(), Array(0..<score.measures.count))
     }
 
     func testTapAboveTheStaffResolvesToNothing() {

@@ -59,6 +59,10 @@ public enum ScoreRenderer {
     /// the always-light score paper, so it only needs a light-mode value.
     static let sectionBracketCSS = "rgba(52, 92, 217, 0.95)"
 
+    /// Cursor wash over the current note. Drawn on the always-light score
+    /// paper, so it needs only a light-mode value.
+    static let cursorCSS = "rgba(52, 92, 217, 0.20)"
+
     /// Dynamics are conventionally set in bold italic serif.
     static let dynamicsFont = FontInfo(family: "Times New Roman", size: 12, weight: "bold", style: "italic")
 
@@ -80,19 +84,30 @@ public enum ScoreRenderer {
         public var horizontalMargin: Double
         /// Blank space between wrapped rows.
         public var rowGap: Double
+        /// Horizontal room each note wants, in staff-spaces. Drives how many
+        /// measures fit on a row, so raising it spreads the music out and
+        /// lengthens the score rather than squeezing more onto each line.
+        public var noteSpacingInSpaces: Double
 
         public init(
-            staveSpace: Double = 12,
+            staveSpace: Double = 11,
             // Chosen as the largest width that still fits two measures per row
-            // on a ~390pt phone (about 108pt each — comfortable for four
-            // quarter notes at this stave size). Larger drops it to one
-            // measure per line, which barely improves on not wrapping at all.
+            // on a ~390pt phone. Larger drops it to one measure per line,
+            // which barely improves on not wrapping at all.
             minMeasureWidth: Double = 100,
             rowPrefixWidth: Double = 70,
             firstRowExtraWidth: Double = 34,
             topMargin: Double = 12,
             horizontalMargin: Double = 12,
-            rowGap: Double = 16
+            // Generous, because notation now reaches well outside the staff:
+            // slurs arc above, fingerings sit over noteheads, dynamics hang
+            // below. VexFoundation's own 4 line-spacings of reserved margin
+            // don't cover a stacked slur plus fingering, and rows collided.
+            rowGap: Double = 36,
+            // 2.2 spaces/note keeps the busiest bars of the Gavotte legible
+            // (they were at 1.75) without stretching the piece from 45 rows to
+            // the 86 that 2.6 would cost.
+            noteSpacingInSpaces: Double = 2.2
         ) {
             self.staveSpace = staveSpace
             self.minMeasureWidth = minMeasureWidth
@@ -101,29 +116,94 @@ public enum ScoreRenderer {
             self.topMargin = topMargin
             self.horizontalMargin = horizontalMargin
             self.rowGap = rowGap
+            self.noteSpacingInSpaces = noteSpacingInSpaces
         }
 
         /// Full vertical extent of one engraved row, excluding the gap.
         var rowHeight: Double { ScoreRenderer.staveExtentInSpaces * staveSpace }
     }
 
-    /// How measures pack onto rows for a given canvas width. Computed the same
-    /// way by `canvasSize` and `draw` so the height reserved and the height
-    /// actually drawn can't disagree.
-    struct RowPlan {
-        let measuresPerRow: Int
-        let rowCount: Int
+    /// One engraved row: which measures it holds, how wide each is drawn, and
+    /// the clef/key-signature block at its head.
+    struct RowLayout {
+        let measureIndices: [Int]
+        let widths: [Double]
+        let prefixWidth: Double
+
+        var totalWidth: Double { prefixWidth + widths.reduce(0, +) }
+    }
+
+    /// The whole page: rows of measures, sized to a given canvas width.
+    /// Computed once and shared by `canvasSize`, `draw` and `playableIndex`, so
+    /// the height reserved, the notation drawn, and where a tap lands can't
+    /// disagree with each other.
+    struct ScorePlan {
+        let rows: [RowLayout]
         let contentWidth: Double
     }
 
-    static func rowPlan(measureCount: Int, availableWidth: Double, metrics: Metrics) -> RowPlan {
+    /// Space a measure wants, before justification: enough for its notes to
+    /// breathe, never below `minMeasureWidth`.
+    ///
+    /// `noteSpacing` is expressed in staff-spaces per note, which is how
+    /// engravers think about density — it stays right if the staff size
+    /// changes. Packing rows to this rather than to a fixed measures-per-row
+    /// is what lets a dense bar take a line to itself while sparse bars share
+    /// one, the way printed music does.
+    static func idealWidth(noteCount: Int, metrics: Metrics) -> Double {
+        max(metrics.minMeasureWidth, Double(max(1, noteCount)) * metrics.staveSpace * metrics.noteSpacingInSpaces)
+    }
+
+    /// Justified widths for a hypothetical row, for tests to check that a
+    /// denser bar is given more room.
+    static func measureWidthsForTesting(noteCounts: [Int], available: Double, metrics: Metrics) -> [Double] {
+        let wanted = noteCounts.map { idealWidth(noteCount: $0, metrics: metrics) }
+        let total = wanted.reduce(0, +)
+        guard total > 0 else { return [] }
+        return wanted.map { available * $0 / total }
+    }
+
+    static func plan(measures: [ScoreMeasure], availableWidth: Double, metrics: Metrics) -> ScorePlan {
         let contentWidth = max(metrics.minMeasureWidth, availableWidth - metrics.horizontalMargin * 2)
-        // The first row is the tightest, since it also carries the time
-        // signature. Packing to that width keeps every row the same shape.
-        let usable = contentWidth - metrics.rowPrefixWidth - metrics.firstRowExtraWidth
-        let perRow = max(1, Int(usable / metrics.minMeasureWidth))
-        let count = max(1, Int(ceil(Double(max(1, measureCount)) / Double(perRow))))
-        return RowPlan(measuresPerRow: perRow, rowCount: count, contentWidth: contentWidth)
+        guard !measures.isEmpty else {
+            return ScorePlan(rows: [], contentWidth: contentWidth)
+        }
+
+        let ideals = measures.map { idealWidth(noteCount: $0.notes.count, metrics: metrics) }
+
+        // Greedy line breaking: fill a row until the next measure won't fit.
+        var rows: [[Int]] = []
+        var current: [Int] = []
+        var used = 0.0
+        var index = 0
+        while index < measures.count {
+            let prefix = metrics.rowPrefixWidth + (rows.isEmpty ? metrics.firstRowExtraWidth : 0)
+            let available = contentWidth - prefix
+            if !current.isEmpty, used + ideals[index] > available {
+                rows.append(current)
+                current = []
+                used = 0
+                continue
+            }
+            current.append(index)
+            used += ideals[index]
+            index += 1
+        }
+        if !current.isEmpty { rows.append(current) }
+
+        // Justify each row to end flush, keeping the relative proportions.
+        let layouts = rows.enumerated().map { rowIndex, indices -> RowLayout in
+            let prefix = metrics.rowPrefixWidth + (rowIndex == 0 ? metrics.firstRowExtraWidth : 0)
+            let available = contentWidth - prefix
+            let wanted = indices.map { ideals[$0] }
+            let total = wanted.reduce(0, +)
+            let widths = total > 0
+                ? wanted.map { available * $0 / total }
+                : Array(repeating: available / Double(indices.count), count: indices.count)
+            return RowLayout(measureIndices: indices, widths: widths, prefixWidth: prefix)
+        }
+
+        return ScorePlan(rows: layouts, contentWidth: contentWidth)
     }
 
     /// The pixel size `draw` will use for this score at a given width —
@@ -134,15 +214,12 @@ public enum ScoreRenderer {
         availableWidth: Double,
         metrics: Metrics = Metrics()
     ) -> (width: Double, height: Double) {
-        let plan = rowPlan(
-            measureCount: score.measures.count,
-            availableWidth: availableWidth,
-            metrics: metrics
-        )
+        let layout = plan(measures: score.measures, availableWidth: availableWidth, metrics: metrics)
+        let rowCount = max(1, layout.rows.count)
         let height = metrics.topMargin * 2
-            + Double(plan.rowCount) * metrics.rowHeight
-            + Double(max(0, plan.rowCount - 1)) * metrics.rowGap
-        return (max(availableWidth, plan.contentWidth), height)
+            + Double(rowCount) * metrics.rowHeight
+            + Double(rowCount - 1) * metrics.rowGap
+        return (max(availableWidth, layout.contentWidth), height)
     }
 
     /// Which playable note a tap at `point` lands on, or nil if the tap is
@@ -162,28 +239,43 @@ public enum ScoreRenderer {
     ) -> Int? {
         let measures = score.measures
         guard !measures.isEmpty else { return nil }
-        let plan = rowPlan(measureCount: measures.count, availableWidth: availableWidth, metrics: metrics)
+        let layout = plan(measures: measures, availableWidth: availableWidth, metrics: metrics)
+        guard !layout.rows.isEmpty else { return nil }
 
         let rowStride = metrics.rowHeight + metrics.rowGap
         let rowFloat = (Double(point.y) - metrics.topMargin) / rowStride
         guard rowFloat >= -0.35 else { return nil } // above the first stave
-        let row = max(0, min(plan.rowCount - 1, Int(rowFloat)))
+        let rowIndex = max(0, min(layout.rows.count - 1, Int(rowFloat)))
+        let row = layout.rows[rowIndex]
+        guard !row.widths.isEmpty else { return nil }
 
-        let isFirstRow = row == 0
-        let rowPrefix = metrics.rowPrefixWidth + (isFirstRow ? metrics.firstRowExtraWidth : 0)
-        let measureWidth = (plan.contentWidth - rowPrefix) / Double(plan.measuresPerRow)
-        guard measureWidth > 0 else { return nil }
+        // Walk the row's widths to find the bar under the tap. Taps in the
+        // clef/key-signature block fall before the first width and belong to
+        // the row's first measure.
+        let xInRow = Double(point.x) - metrics.horizontalMargin - row.prefixWidth
+        var column = row.widths.count - 1
+        var runningX = 0.0
+        var startX = 0.0
+        for (i, width) in row.widths.enumerated() {
+            if xInRow < runningX + width {
+                column = i
+                startX = runningX
+                break
+            }
+            runningX += width
+            startX = runningX
+        }
+        column = max(0, min(row.widths.count - 1, column))
+        if column == row.widths.count - 1 { startX = row.widths.dropLast().reduce(0, +) }
 
-        // Taps in the clef/key-signature area belong to the row's first measure.
-        let xInRow = Double(point.x) - metrics.horizontalMargin - rowPrefix
-        let column = max(0, min(plan.measuresPerRow - 1, Int(floor(xInRow / measureWidth))))
-
-        let measureIndex = row * plan.measuresPerRow + column
+        let measureIndex = row.measureIndices[column]
         guard measureIndex >= 0, measureIndex < measures.count else { return nil }
         let measure = measures[measureIndex]
+        let measureWidth = row.widths[column]
+        guard measureWidth > 0 else { return nil }
 
         // Where in the measure the tap fell, 0...1.
-        let measureStartX = metrics.horizontalMargin + rowPrefix + Double(column) * measureWidth
+        let measureStartX = metrics.horizontalMargin + row.prefixWidth + startX
         let fraction = max(0, min(1, (Double(point.x) - measureStartX) / measureWidth))
 
         // Walk the measure's notes by beat and take the one spanning the tap.
@@ -208,72 +300,77 @@ public enum ScoreRenderer {
         return playable.isEmpty ? nil : playable.count - 1
     }
 
-    /// Draws `score` into `context` and returns the resulting layout. Call
-    /// this from inside a `VexCanvas` draw closure.
+    /// Draws **one row** of the score into a row-sized context, and returns
+    /// where each of its playable notes landed.
+    ///
+    /// Rows are drawn separately, each into its own canvas, so the view can
+    /// put them in a `LazyVStack` and only render what's on screen. Drawing
+    /// the whole score into a single canvas meant every scroll frame rebuilt
+    /// all 89 staves, 437 notes, 96 beams and 99 slurs — which is what made
+    /// scrolling stutter.
+    ///
+    /// The cost of splitting: a slur spanning a line break can't be drawn as
+    /// one curve. Printed music breaks such a slur across the two lines
+    /// anyway, so only the joining arc is lost.
+    ///
+    /// - Parameter cursorPlayableIndex: note to mark, or nil. Passing it here
+    ///   rather than drawing the cursor separately keeps a cursor move to a
+    ///   single row's redraw.
     @discardableResult
-    /// - Parameter sectionMeasures: bars chosen for repeat practice, marked
-    ///   with a bracket at each end of the range.
-    public static func draw(
+    public static func drawRow(
         score: Score,
+        rowIndex: Int,
         into context: RenderContext,
         availableWidth: Double,
+        cursorPlayableIndex: Int? = nil,
         sectionMeasures: ClosedRange<Int>? = nil,
         metrics: Metrics = Metrics()
-    ) -> ScoreLayout {
+    ) -> [RenderedNotePosition] {
         FontLoader.loadDefaultFonts()
 
         let measures = score.measures
-        let plan = rowPlan(measureCount: measures.count, availableWidth: availableWidth, metrics: metrics)
-        let size = canvasSize(for: score, availableWidth: availableWidth, metrics: metrics)
+        let layout = plan(measures: measures, availableWidth: availableWidth, metrics: metrics)
+        guard rowIndex >= 0, rowIndex < layout.rows.count else { return [] }
+        let row = layout.rows[rowIndex]
 
-        let factory = Factory(options: FactoryOptions(staveSpace: metrics.staveSpace, width: size.width, height: size.height))
+        let factory = Factory(options: FactoryOptions(
+            staveSpace: metrics.staveSpace,
+            width: layout.contentWidth + metrics.horizontalMargin * 2,
+            height: metrics.rowHeight
+        ))
         _ = factory.setContext(context)
 
         let keyName = keyNames[score.fifths] ?? "C"
+        // Playable index of the first note on this row, so positions carry the
+        // same numbering everything else uses.
+        var playableIndex = playableIndexOfFirstNote(inRow: row, measures: measures, score: score)
+
         var positions: [RenderedNotePosition] = []
-        var playableIndex = 0
-        var sectionOpen: (x: Double, top: Double, bottom: Double)?
-        var sectionClose: (x: Double, top: Double, bottom: Double)?
-        // Slurs routinely run across a barline, so their endpoints are
-        // resolved after every measure has been built rather than within one.
         var openSlurNotes: [StaveNote] = []
         var slurPairs: [(from: StaveNote, to: StaveNote)] = []
+        var sectionOpen: (x: Double, top: Double, bottom: Double)?
+        var sectionClose: (x: Double, top: Double, bottom: Double)?
 
-        for (measureIndex, measure) in measures.enumerated() {
-            let row = measureIndex / plan.measuresPerRow
-            let column = measureIndex % plan.measuresPerRow
+        for (column, measureIndex) in row.measureIndices.enumerated() {
+            let measure = measures[measureIndex]
             let isRowStart = column == 0
-            let isFirstRow = row == 0
-
-            // Every row repeats the clef and key signature, as printed music
-            // does — a wrapped line has to be readable on its own. Only the
-            // first row carries the time signature, so only it needs the
-            // extra room.
-            let rowPrefix = metrics.rowPrefixWidth + (isFirstRow ? metrics.firstRowExtraWidth : 0)
-            // Measures share what's left of the row evenly, so a full row
-            // finishes flush at the right margin instead of ending ragged.
-            let measureWidth = (plan.contentWidth - rowPrefix) / Double(plan.measuresPerRow)
-
-            // The row's first stave is widened by the prefix and starts at the
-            // margin; the rest begin after it.
-            let x = metrics.horizontalMargin
-                + (isRowStart ? 0 : rowPrefix)
-                + Double(column) * measureWidth
-            let y = metrics.topMargin + Double(row) * (metrics.rowHeight + metrics.rowGap)
-
-            let staveWidth = measureWidth + (isRowStart ? rowPrefix : 0)
+            let measureWidth = row.widths[column]
+            let precedingWidth = row.widths.prefix(column).reduce(0, +)
+            let x = metrics.horizontalMargin + (isRowStart ? 0 : row.prefixWidth) + precedingWidth
+            // Row-local coordinates: each row canvas starts at its own origin.
+            let y = 0.0
+            let staveWidth = measureWidth + (isRowStart ? row.prefixWidth : 0)
             let stave = factory.Stave(x: x, y: y, width: staveWidth)
 
             if isRowStart {
                 _ = stave.addClef(.treble)
                 _ = stave.addKeySignature(keyName)
-                if isFirstRow {
+                if rowIndex == 0 {
                     _ = stave.addTimeSignature(.meter(score.beatsPerMeasure, score.beatType))
                 }
             }
 
             var staveNotes: [StaveNote] = []
-            /// Parallel to `staveNotes`: the playable index for a real note, or nil for a rest.
             var staveNotePlayableIndex: [Int?] = []
 
             for note in measure.notes {
@@ -311,7 +408,7 @@ public enum ScoreRenderer {
                     _ = staveNote.addModifier(factory.Articulation(type: articulation.vexCode), index: 0)
                 }
                 if let fingering = note.fingering {
-                    _ = staveNote.addModifier(factory.Fingering(number: fingering, position: .left), index: 0)
+                    _ = staveNote.addModifier(factory.Fingering(number: fingering, position: .above), index: 0)
                 }
                 if let dynamic = note.dynamic {
                     _ = staveNote.addModifier(
@@ -352,30 +449,20 @@ public enum ScoreRenderer {
                     }
                     beamGroup = []
                 case nil:
-                    // An unbeamed note interrupts any run left dangling by
-                    // malformed input; a single note is not a beam.
                     beamGroup = []
                 }
             }
 
             let voice = factory.Voice(timeSignature: .meter(score.beatsPerMeasure, score.beatType))
-            _ = voice.setStrict(false) // tolerate the last measure being under-full rather than throwing
+            _ = voice.setStrict(false) // tolerate a pickup or short final bar
             _ = voice.addTickables(staveNotes.map { $0 as Tickable })
 
             let formatter = factory.Formatter()
             _ = formatter.formatToStave([voice], stave: stave)
 
-            // Bracket the cursor to the staff lines themselves rather than the
-            // stave's full box, which includes four line-spacings of headroom
-            // above the top line and would draw a cursor floating well clear
-            // of the notes.
             let staffTop = stave.getYForLine(0)
             let staffBottom = stave.getYForLine(4)
 
-            // Note where the section's brackets go. Drawing has to wait until
-            // after factory.draw(), because any fill or stroke style set here
-            // would still be current when VexFoundation renders the notation
-            // and would tint the noteheads with it.
             if let sectionMeasures {
                 if measure.number == sectionMeasures.lowerBound {
                     sectionOpen = (x, staffTop, staffBottom)
@@ -396,15 +483,28 @@ public enum ScoreRenderer {
             }
         }
 
-        // Slurs are queued before drawing so VexFoundation renders them with
-        // the rest of the notation.
         for pair in slurPairs {
             _ = factory.Curve(from: pair.from, to: pair.to)
         }
 
         try? factory.draw()
 
-        // After the notation, so the bracket's stroke style can't bleed into it.
+        // Overlays go after the notation: the render context is stateful, and
+        // a fill or stroke style set earlier would tint the noteheads.
+        if let cursorPlayableIndex,
+           let position = positions.first(where: { $0.playableIndex == cursorPlayableIndex }) {
+            let cursorWidth = metrics.staveSpace * 2.0
+            let padding = metrics.staveSpace * 0.7
+            _ = context.save()
+            _ = context.setFillStyle(cursorCSS)
+            _ = context.fillRect(
+                position.x - cursorWidth / 2,
+                position.staffTopY - padding,
+                cursorWidth,
+                position.staffBottomY - position.staffTopY + padding * 2
+            )
+            _ = context.restore()
+        }
         if let sectionOpen {
             drawSectionBracket(context, x: sectionOpen.x, top: sectionOpen.top, bottom: sectionOpen.bottom, opening: true, metrics: metrics)
         }
@@ -412,7 +512,22 @@ public enum ScoreRenderer {
             drawSectionBracket(context, x: sectionClose.x, top: sectionClose.top, bottom: sectionClose.bottom, opening: false, metrics: metrics)
         }
 
-        return ScoreLayout(totalWidth: size.width, totalHeight: size.height, notePositions: positions)
+        return positions
+    }
+
+    /// How many rows the score wraps to at a given width — what the view
+    /// needs to build its lazy stack.
+    public static func rowCount(for score: Score, availableWidth: Double, metrics: Metrics = Metrics()) -> Int {
+        plan(measures: score.measures, availableWidth: availableWidth, metrics: metrics).rows.count
+    }
+
+    /// Playable index the given row starts at, counting non-rest notes in all
+    /// preceding measures.
+    static func playableIndexOfFirstNote(inRow row: RowLayout, measures: [ScoreMeasure], score: Score) -> Int {
+        guard let firstMeasureIndex = row.measureIndices.first else { return 0 }
+        return measures.prefix(firstMeasureIndex).reduce(0) { count, measure in
+            count + measure.notes.filter { !$0.isRest }.count
+        }
     }
 
     /// A square bracket marking one end of the practice section — the shape
