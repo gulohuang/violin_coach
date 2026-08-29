@@ -98,6 +98,11 @@ enum Theme {
         static let responsive = Animation.spring(response: 0.28, dampingFraction: 0.72)
         /// For state changes the user reads (feedback words, transport state).
         static let gentle = Animation.spring(response: 0.42, dampingFraction: 0.85)
+        /// Auto-scroll following the cursor down the score. Deliberately *not*
+        /// a spring: these steps arrive back-to-back as the cursor advances, so
+        /// a spring's overshoot and settle turn a run of them into a stutter.
+        /// A short ease is quick enough to keep up and blends step to step.
+        static let follow = Animation.easeInOut(duration: 0.4)
     }
 }
 

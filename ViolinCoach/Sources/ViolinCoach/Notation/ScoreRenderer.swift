@@ -589,6 +589,47 @@ public enum ScoreRenderer {
         return positions
     }
 
+    /// Where a playable note sits in the wrapped layout: which row, and how
+    /// far through that row's notes it is.
+    ///
+    /// The fraction is what lets auto-scroll move *continuously*. Knowing only
+    /// the row, the view can do nothing between the first and last note of a
+    /// row and then has to travel a whole row's height in one go — which is
+    /// exactly the lurch this replaces.
+    public struct RowPosition: Equatable {
+        public let row: Int
+        /// 0...1 across the row's playable notes.
+        public let fraction: Double
+    }
+
+    public static func rowPosition(
+        forPlayableIndex index: Int,
+        score: Score,
+        availableWidth: Double,
+        metrics: Metrics = Metrics()
+    ) -> RowPosition? {
+        guard index >= 0 else { return nil }
+        let measures = score.measures
+        let layout = plan(measures: measures, availableWidth: availableWidth, metrics: metrics)
+        guard !layout.rows.isEmpty else { return nil }
+        var seen = 0
+        for (rowIndex, row) in layout.rows.enumerated() {
+            let rowNotes = row.measureIndices.reduce(0) { count, mi in
+                count + measures[mi].notes.filter { !$0.isRest }.count
+            }
+            if index < seen + rowNotes {
+                // A single-note row has no "through" to speak of, so it sits
+                // at the midpoint rather than at either edge.
+                let fraction = rowNotes > 1
+                    ? Double(index - seen) / Double(rowNotes - 1)
+                    : 0.5
+                return RowPosition(row: rowIndex, fraction: fraction)
+            }
+            seen += rowNotes
+        }
+        return RowPosition(row: layout.rows.count - 1, fraction: 1)
+    }
+
     /// Which row a playable note is engraved on — what auto-scroll needs to
     /// know which row to bring into view.
     public static func rowIndex(
@@ -597,18 +638,12 @@ public enum ScoreRenderer {
         availableWidth: Double,
         metrics: Metrics = Metrics()
     ) -> Int? {
-        guard index >= 0 else { return nil }
-        let measures = score.measures
-        let layout = plan(measures: measures, availableWidth: availableWidth, metrics: metrics)
-        var seen = 0
-        for (rowIndex, row) in layout.rows.enumerated() {
-            let rowNotes = row.measureIndices.reduce(0) { count, mi in
-                count + measures[mi].notes.filter { !$0.isRest }.count
-            }
-            if index < seen + rowNotes { return rowIndex }
-            seen += rowNotes
-        }
-        return layout.rows.isEmpty ? nil : layout.rows.count - 1
+        rowPosition(
+            forPlayableIndex: index,
+            score: score,
+            availableWidth: availableWidth,
+            metrics: metrics
+        )?.row
     }
 
     /// How many rows the score wraps to at a given width — what the view

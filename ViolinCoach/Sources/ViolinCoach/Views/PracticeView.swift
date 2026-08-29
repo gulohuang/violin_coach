@@ -7,6 +7,11 @@ import SwiftUI
 struct PracticeView: View {
     @StateObject private var viewModel = PracticeViewModel()
 
+    /// Controls hide once practice starts, so the score gets the whole screen
+    /// — you're reading music at that point, not adjusting settings. Tapping
+    /// the score brings them back.
+    @State private var showsControls = true
+
     var body: some View {
         NavigationStack {
             Group {
@@ -33,7 +38,17 @@ struct PracticeView: View {
                 ScoreCanvasView(
                     score: score,
                     currentPlayableIndex: viewModel.currentIndex,
-                    onSelectNote: { viewModel.moveCursor(to: $0) },
+                    // One gesture, two jobs, split by state: while practice is
+                    // running a tap reveals or hides the controls, and while
+                    // it's stopped a tap still moves the cursor. Adding a
+                    // second gesture would have fought the first.
+                    onSelectNote: { index in
+                        if viewModel.isActive {
+                            withAnimation(Theme.Motion.gentle) { showsControls.toggle() }
+                        } else {
+                            viewModel.moveCursor(to: index)
+                        }
+                    },
                     sectionMeasures: viewModel.sectionMeasures,
                     noteSize: viewModel.noteSize,
                     autoScroll: viewModel.autoScroll,
@@ -41,29 +56,35 @@ struct PracticeView: View {
                 )
                 .frame(maxHeight: .infinity)
 
-                ScoreControlsBar(
-                    tempoBPM: $viewModel.tempoBPM,
-                    noteSize: $viewModel.noteSize,
-                    autoScroll: $viewModel.autoScroll,
-                    defaultTempoBPM: score.tempoBPM
-                )
+                if showsControls {
+                    ScoreControlsBar(
+                        tempoBPM: $viewModel.tempoBPM,
+                        noteSize: $viewModel.noteSize,
+                        autoScroll: $viewModel.autoScroll,
+                        defaultTempoBPM: score.tempoBPM
+                    )
+                    sectionBar
+                    ScoreProgressBar(
+                        current: viewModel.currentIndex,
+                        total: score.playableNotes.count
+                    )
+                }
+            }
 
-                sectionBar
-                ScoreProgressBar(
-                    current: viewModel.currentIndex,
-                    total: score.playableNotes.count
+            // Feedback only exists while there's something to report — no
+            // placeholder card sitting on screen telling you to press a button
+            // that's right there.
+            if viewModel.isActive || viewModel.isComplete {
+                FeedbackCard(
+                    isComplete: viewModel.isComplete,
+                    direction: viewModel.direction,
+                    expectedNoteLabel: viewModel.expectedNoteLabel,
+                    holdProgress: viewModel.holdProgress,
+                    requiredHold: viewModel.requiredHold
                 )
             }
 
-            FeedbackCard(
-                isActive: viewModel.isActive,
-                isComplete: viewModel.isComplete,
-                direction: viewModel.direction,
-                expectedNoteLabel: viewModel.expectedNoteLabel,
-                holdProgress: viewModel.holdProgress,
-                requiredHold: viewModel.requiredHold
-            )
-
+            if showsControls {
             Button {
                 if viewModel.isActive {
                     viewModel.stop()
@@ -80,9 +101,31 @@ struct PracticeView: View {
                 tint: viewModel.isActive ? Theme.Palette.stop : Theme.Palette.accent
             ))
             .padding(.bottom, Theme.Spacing.lg)
+            }
         }
         .padding(.horizontal, Theme.Spacing.lg)
         .padding(.top, Theme.Spacing.md)
+        .animation(Theme.Motion.gentle, value: showsControls)
+        .animation(Theme.Motion.gentle, value: viewModel.isActive)
+        // Starting practice clears the chrome; stopping brings it back, so the
+        // Start button is never stranded behind a hidden bar.
+        .onChange(of: viewModel.isActive) { active in
+            withAnimation(Theme.Motion.gentle) { showsControls = !active }
+        }
+        .overlay(alignment: .bottom) {
+            // The only way back to the controls once they're hidden, so it has
+            // to be discoverable — shown briefly rather than never.
+            if viewModel.isActive && !showsControls {
+                Text("Tap the score for controls")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, Theme.Spacing.sm)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(Theme.Palette.cardSurface.opacity(0.9)))
+                    .padding(.bottom, Theme.Spacing.sm)
+                    .transition(.opacity)
+            }
+        }
     }
 
     /// Section picker. Selecting is two taps on the score, so the button only
@@ -141,7 +184,6 @@ struct PracticeView: View {
 /// position — never by color alone, so the red/green signal at the heart of
 /// this screen still works for colorblind players.
 private struct FeedbackCard: View {
-    let isActive: Bool
     let isComplete: Bool
     let direction: PitchDirection?
     let expectedNoteLabel: String
@@ -165,7 +207,7 @@ private struct FeedbackCard: View {
                     .foregroundStyle(Theme.Palette.inTune)
                 Text("Piece complete")
                     .font(.title3.weight(.semibold))
-            } else if isActive {
+            } else {
                 VStack(spacing: Theme.Spacing.xs) {
                     Text("Play")
                         .font(.footnote)
@@ -208,13 +250,6 @@ private struct FeedbackCard: View {
                         .foregroundStyle(.secondary)
                 }
                 .padding(.horizontal, Theme.Spacing.lg)
-            } else {
-                Image(systemName: "waveform")
-                    .font(.system(size: 36))
-                    .foregroundStyle(.secondary)
-                Text("Tap Start Practice to begin")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
             }
         }
         .frame(maxWidth: .infinity)
