@@ -13,6 +13,13 @@ public final class ScorePlayerViewModel: ObservableObject {
     public let player: ScoreAudioPlayer
     public var a4Reference: Double = 440
 
+    /// Playback tempo. Starts from the score's own marking and is then the
+    /// user's to change; the score is never mutated.
+    @Published public var tempoBPM: Double = 120
+    @Published public var noteSize: ScoreRenderer.NoteSize = .mediumSmall
+    /// Keep the row being played centred on screen.
+    @Published public var autoScroll = true
+
     private var cancellables = Set<AnyCancellable>()
 
     public init(player: ScoreAudioPlayer = ScoreAudioPlayer()) {
@@ -38,6 +45,7 @@ public final class ScorePlayerViewModel: ObservableObject {
         switch ScoreLibrary.loadBundledSample() {
         case .success(let score):
             self.score = score
+            self.tempoBPM = score.tempoBPM
             self.loadError = nil
         case .failure(let error):
             self.loadError = error.localizedDescription
@@ -49,7 +57,7 @@ public final class ScorePlayerViewModel: ObservableObject {
         if player.isPlaying {
             player.stop()
         } else {
-            player.play(score: score, a4: a4Reference)
+            player.play(score: score, a4: a4Reference, tempoBPM: tempoBPM)
         }
     }
 

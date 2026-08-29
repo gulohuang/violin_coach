@@ -29,7 +29,7 @@ struct ScorePlayerView: View {
                 VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                     Text(score.title)
                         .font(.title3.weight(.semibold))
-                    Text("\(Int(score.tempoBPM)) BPM · \(score.beatsPerMeasure)/\(score.beatType) · \(score.playableNotes.count) notes")
+                    Text("\(score.beatsPerMeasure)/\(score.beatType) · \(score.playableNotes.count) notes")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -37,8 +37,21 @@ struct ScorePlayerView: View {
 
                 // Greedy: the score takes whatever height is left above the
                 // transport and scrolls internally, so no Spacer here.
-                ScoreCanvasView(score: score, currentPlayableIndex: viewModel.currentPlayableIndex)
-                    .frame(maxHeight: .infinity)
+                ScoreCanvasView(
+                    score: score,
+                    currentPlayableIndex: viewModel.currentPlayableIndex,
+                    noteSize: viewModel.noteSize,
+                    autoScroll: viewModel.autoScroll,
+                    tempoBPM: viewModel.tempoBPM
+                )
+                .frame(maxHeight: .infinity)
+
+                ScoreControlsBar(
+                    tempoBPM: $viewModel.tempoBPM,
+                    noteSize: $viewModel.noteSize,
+                    autoScroll: $viewModel.autoScroll,
+                    defaultTempoBPM: score.tempoBPM
+                )
 
                 ScoreProgressBar(
                     current: viewModel.currentPlayableIndex,

@@ -34,9 +34,19 @@ struct PracticeView: View {
                     score: score,
                     currentPlayableIndex: viewModel.currentIndex,
                     onSelectNote: { viewModel.moveCursor(to: $0) },
-                    sectionMeasures: viewModel.sectionMeasures
+                    sectionMeasures: viewModel.sectionMeasures,
+                    noteSize: viewModel.noteSize,
+                    autoScroll: viewModel.autoScroll,
+                    tempoBPM: viewModel.tempoBPM
                 )
                 .frame(maxHeight: .infinity)
+
+                ScoreControlsBar(
+                    tempoBPM: $viewModel.tempoBPM,
+                    noteSize: $viewModel.noteSize,
+                    autoScroll: $viewModel.autoScroll,
+                    defaultTempoBPM: score.tempoBPM
+                )
 
                 sectionBar
                 ScoreProgressBar(

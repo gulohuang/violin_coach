@@ -40,6 +40,13 @@ public final class PracticeViewModel: ObservableObject {
     /// Times round a looping section, so the player can see it repeating.
     @Published public private(set) var loopCount = 0
 
+    /// Tempo the sustain requirement is measured against. Slowing this down
+    /// gives more time per note, which is exactly what practising slowly means.
+    @Published public var tempoBPM: Double = 120
+    @Published public var noteSize: ScoreRenderer.NoteSize = .mediumSmall
+    /// Keep the row being practised centred on screen.
+    @Published public var autoScroll = true
+
     public let detector: PitchDetector
 
     /// How far off pitch still counts. Loose enough for bow and vibrato
@@ -88,6 +95,7 @@ public final class PracticeViewModel: ObservableObject {
         switch ScoreLibrary.loadBundledSample() {
         case .success(let score):
             self.score = score
+            self.tempoBPM = score.tempoBPM
             loadError = nil
         case .failure(let error):
             loadError = error.localizedDescription
@@ -216,7 +224,7 @@ public final class PracticeViewModel: ObservableObject {
     /// Seconds the current note must be sustained before the cursor advances.
     public var requiredHold: TimeInterval {
         guard let score, let expected = expectedNote else { return minimumHold }
-        let written = score.seconds(forBeats: expected.beatsInQuarters)
+        let written = score.seconds(forBeats: expected.beatsInQuarters, tempoBPM: tempoBPM)
         return min(maximumHold, max(minimumHold, written * holdFraction))
     }
 

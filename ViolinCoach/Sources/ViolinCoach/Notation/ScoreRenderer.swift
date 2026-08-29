@@ -59,12 +59,48 @@ public enum ScoreRenderer {
     /// the always-light score paper, so it only needs a light-mode value.
     static let sectionBracketCSS = "rgba(52, 92, 217, 0.95)"
 
+    /// Measure numbers and the tempo marking, in the muted grey printed music
+    /// uses for editorial marks rather than the black of the notation itself.
+    static let marginInkCSS = "rgba(60, 60, 67, 0.62)"
+    static let measureNumberBoxCSS = "rgba(60, 60, 67, 0.08)"
+
     /// Cursor wash over the current note. Drawn on the always-light score
     /// paper, so it needs only a light-mode value.
     static let cursorCSS = "rgba(52, 92, 217, 0.20)"
 
     /// Dynamics are conventionally set in bold italic serif.
     static let dynamicsFont = FontInfo(family: "Times New Roman", size: 12, weight: "bold", style: "italic")
+
+    /// How large the notation is drawn. Everything else in `Metrics` scales
+    /// off `staveSpace`, so this one value sets the whole engraving size —
+    /// and, because rows pack by staff-spaces per note, a larger size also
+    /// spreads the music out rather than just magnifying a cramped layout.
+    public enum NoteSize: String, CaseIterable, Identifiable, Sendable {
+        case small, mediumSmall, medium, mediumLarge, large
+
+        public var id: String { rawValue }
+
+        public var label: String {
+            switch self {
+            case .small: return "Small"
+            case .mediumSmall: return "Med. Small"
+            case .medium: return "Medium"
+            case .mediumLarge: return "Med. Large"
+            case .large: return "Large"
+            }
+        }
+
+        /// VexFlow's default staff-line distance is 10; these bracket it.
+        public var staveSpace: Double {
+            switch self {
+            case .small: return 8
+            case .mediumSmall: return 9.5
+            case .medium: return 11
+            case .mediumLarge: return 13
+            case .large: return 15.5
+            }
+        }
+    }
 
     public struct Metrics {
         /// Distance between staff lines. VexFlow's default is
@@ -117,6 +153,22 @@ public enum ScoreRenderer {
             self.horizontalMargin = horizontalMargin
             self.rowGap = rowGap
             self.noteSpacingInSpaces = noteSpacingInSpaces
+        }
+
+        /// Builds metrics for a chosen note size. The prefix widths and gap
+        /// scale with it too, or a large staff would keep a clef block sized
+        /// for a small one.
+        public init(noteSize: NoteSize) {
+            let space = noteSize.staveSpace
+            self.init(
+                staveSpace: space,
+                minMeasureWidth: space * 9,
+                rowPrefixWidth: space * 6.4,
+                firstRowExtraWidth: space * 3.1,
+                topMargin: 12,
+                horizontalMargin: 12,
+                rowGap: space * 2.4
+            )
         }
 
         /// Full vertical extent of one engraved row, excluding the gap.
@@ -324,6 +376,8 @@ public enum ScoreRenderer {
         availableWidth: Double,
         cursorPlayableIndex: Int? = nil,
         sectionMeasures: ClosedRange<Int>? = nil,
+        /// Printed as a tempo marking above the first row, as on a printed part.
+        tempoBPM: Double? = nil,
         metrics: Metrics = Metrics()
     ) -> [RenderedNotePosition] {
         FontLoader.loadDefaultFonts()
@@ -350,6 +404,7 @@ public enum ScoreRenderer {
         var slurPairs: [(from: StaveNote, to: StaveNote)] = []
         var sectionOpen: (x: Double, top: Double, bottom: Double)?
         var sectionClose: (x: Double, top: Double, bottom: Double)?
+        var rowStaffTop: Double?
 
         for (column, measureIndex) in row.measureIndices.enumerated() {
             let measure = measures[measureIndex]
@@ -462,6 +517,7 @@ public enum ScoreRenderer {
 
             let staffTop = stave.getYForLine(0)
             let staffBottom = stave.getYForLine(4)
+            if rowStaffTop == nil { rowStaffTop = staffTop }
 
             if let sectionMeasures {
                 if measure.number == sectionMeasures.lowerBound {
@@ -512,7 +568,47 @@ public enum ScoreRenderer {
             drawSectionBracket(context, x: sectionClose.x, top: sectionClose.top, bottom: sectionClose.bottom, opening: false, metrics: metrics)
         }
 
+        // Bar number at the head of the row, the way printed parts number the
+        // start of each system — it's what lets a player find "bar 26".
+        // Taken from the stave rather than from a note, so a row opening on a
+        // bar of rests is still numbered.
+        if let firstMeasure = row.measureIndices.first.map({ measures[$0] }), let rowStaffTop {
+            drawMeasureNumber(
+                context,
+                number: firstMeasure.number,
+                x: metrics.horizontalMargin,
+                staffTop: rowStaffTop,
+                metrics: metrics
+            )
+        }
+
+        if rowIndex == 0, let tempoBPM {
+            drawTempoMarking(context, bpm: tempoBPM, x: metrics.horizontalMargin, metrics: metrics)
+        }
+
         return positions
+    }
+
+    /// Which row a playable note is engraved on — what auto-scroll needs to
+    /// know which row to bring into view.
+    public static func rowIndex(
+        forPlayableIndex index: Int,
+        score: Score,
+        availableWidth: Double,
+        metrics: Metrics = Metrics()
+    ) -> Int? {
+        guard index >= 0 else { return nil }
+        let measures = score.measures
+        let layout = plan(measures: measures, availableWidth: availableWidth, metrics: metrics)
+        var seen = 0
+        for (rowIndex, row) in layout.rows.enumerated() {
+            let rowNotes = row.measureIndices.reduce(0) { count, mi in
+                count + measures[mi].notes.filter { !$0.isRest }.count
+            }
+            if index < seen + rowNotes { return rowIndex }
+            seen += rowNotes
+        }
+        return layout.rows.isEmpty ? nil : layout.rows.count - 1
     }
 
     /// How many rows the score wraps to at a given width — what the view
@@ -528,6 +624,45 @@ public enum ScoreRenderer {
         return measures.prefix(firstMeasureIndex).reduce(0) { count, measure in
             count + measure.notes.filter { !$0.isRest }.count
         }
+    }
+
+    /// The bar number printed at the start of a system, in a soft box.
+    private static func drawMeasureNumber(
+        _ context: RenderContext,
+        number: Int,
+        x: Double,
+        staffTop: Double,
+        metrics: Metrics
+    ) {
+        let size = metrics.staveSpace * 1.15
+        let text = "\(number)"
+        let boxWidth = size * (text.count > 1 ? 1.9 : 1.35)
+        let boxHeight = size * 1.5
+        let y = staffTop - metrics.staveSpace * 3.1
+
+        _ = context.save()
+        _ = context.setFillStyle(measureNumberBoxCSS)
+        _ = context.fillRect(x, y, boxWidth, boxHeight)
+        _ = context.setFillStyle(marginInkCSS)
+        _ = context.setFont(FontInfo(family: "Helvetica", size: size, weight: "bold"))
+        _ = context.fillText(text, x + boxWidth * 0.28, y + boxHeight * 0.75)
+        _ = context.restore()
+    }
+
+    /// Tempo marking above the first system, as "= 88" beside a note glyph's
+    /// place. Rendered as plain text rather than an engraved metronome mark,
+    /// which VexFoundation has no direct API for.
+    private static func drawTempoMarking(
+        _ context: RenderContext,
+        bpm: Double,
+        x: Double,
+        metrics: Metrics
+    ) {
+        _ = context.save()
+        _ = context.setFillStyle(marginInkCSS)
+        _ = context.setFont(FontInfo(family: "Times New Roman", size: metrics.staveSpace * 1.3, weight: "bold", style: "italic"))
+        _ = context.fillText("♩ = \(Int(bpm))", x, metrics.staveSpace * 1.6)
+        _ = context.restore()
     }
 
     /// A square bracket marking one end of the practice section — the shape

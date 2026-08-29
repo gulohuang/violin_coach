@@ -235,7 +235,15 @@ Simulator audio input is often silent by default — check
   MIDI alone cannot tell B♭ from A♯. An accidental prints only where the note
   departs from the key signature — deriving it from `alter` alone put a sharp
   on all 40 F naturals in the Gavotte, which is in G major.
-- **No auto-scroll to cursor** — the score scrolls by hand.
+- **Score layout follows the reference style**: edge to edge with no card,
+  bar numbers boxed at the head of each system, a tempo marking above the
+  first, and rows packed by content. Note size, tempo and auto-scroll are user
+  controls (`ScoreControlsBar`), so anything size-dependent must derive from
+  `Metrics.staveSpace` rather than being hardcoded.
+- **Rows render lazily, one `Canvas` each.** Drawing the whole score into a
+  single tall canvas rebuilt every stave, note, beam and slur on every scroll
+  frame. A slur spanning a line break is the one casualty — printed music
+  breaks those anyway.
 - **One bundled score** — Gavotte (P. Martini), 89 bars of single-voice
   violin, extracted from its `.mxl` (a zip container) at authoring time. The
   parser reads plain MusicXML only; `.mxl` support would mean adding archive

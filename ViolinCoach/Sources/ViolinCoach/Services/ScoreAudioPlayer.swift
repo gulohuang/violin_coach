@@ -25,7 +25,7 @@ public final class ScoreAudioPlayer: ObservableObject {
 
     public init() {}
 
-    public func play(score: Score, a4: Double = 440) {
+    public func play(score: Score, a4: Double = 440, tempoBPM: Double? = nil) {
         stop()
         let notes = score.playableNotes
         guard !notes.isEmpty else { return }
@@ -65,7 +65,7 @@ public final class ScoreAudioPlayer: ObservableObject {
                 if Task.isCancelled { break }
                 guard let self else { return }
                 self.currentIndex = i
-                let seconds = score.seconds(forBeats: note.beatsInQuarters)
+                let seconds = score.seconds(forBeats: note.beatsInQuarters, tempoBPM: tempoBPM)
                 if !note.isRest {
                     // Rendering the tone buffer is real DSP work — keep it and
                     // the node access on the audio queue, off the main actor.

@@ -161,8 +161,10 @@ public struct Score: Sendable {
         notes.filter { !$0.isRest }
     }
 
-    /// Seconds a note of this length should sound at the score's tempo (quarter note = one beat).
-    public func seconds(forBeats beats: Double) -> Double {
-        beats * (60.0 / tempoBPM)
+    /// Seconds a note of this length should sound (quarter note = one beat).
+    /// `tempoBPM` overrides the score's own marking, so the player and the
+    /// practice hold clock can follow a tempo the user has chosen.
+    public func seconds(forBeats beats: Double, tempoBPM: Double? = nil) -> Double {
+        beats * (60.0 / max(1, tempoBPM ?? self.tempoBPM))
     }
 }

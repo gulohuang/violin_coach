@@ -46,14 +46,20 @@ struct ScoreCanvasView: View {
     var onSelectNote: ((Int) -> Void)?
     /// Bars chosen for repeat practice, marked with a bracket at each end.
     var sectionMeasures: ClosedRange<Int>?
+    var noteSize: ScoreRenderer.NoteSize = .medium
+    /// Keep the row holding the cursor centred as playback moves.
+    var autoScroll: Bool = false
+    /// Printed as a tempo marking above the first system.
+    var tempoBPM: Double?
 
-    private let metrics = ScoreRenderer.Metrics()
+    private var metrics: ScoreRenderer.Metrics { .init(noteSize: noteSize) }
 
     var body: some View {
         GeometryReader { geo in
             let width = geo.size.width
             let rowCount = ScoreRenderer.rowCount(for: score, availableWidth: width, metrics: metrics)
 
+            ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(spacing: metrics.rowGap) {
                     ForEach(0..<max(1, rowCount), id: \.self) { rowIndex in
@@ -66,6 +72,7 @@ struct ScoreCanvasView: View {
                                 availableWidth: width,
                                 cursorPlayableIndex: currentPlayableIndex >= 0 ? currentPlayableIndex : nil,
                                 sectionMeasures: sectionMeasures,
+                                tempoBPM: tempoBPM,
                                 metrics: metrics
                             )
                         }
@@ -88,22 +95,31 @@ struct ScoreCanvasView: View {
                             ) else { return }
                             onSelectNote(index)
                         }
+                        .id(rowIndex)
                     }
                 }
                 .padding(.vertical, metrics.topMargin)
             }
+            // Follow the cursor onto its row. Anchored centre so the row being
+            // played sits mid-screen with context above and below, rather than
+            // scrolling to the very top where you can't see what's coming.
+            .onChange(of: currentPlayableIndex) { index in
+                guard autoScroll, index >= 0 else { return }
+                guard let row = ScoreRenderer.rowIndex(
+                    forPlayableIndex: index,
+                    score: score,
+                    availableWidth: width,
+                    metrics: metrics
+                ) else { return }
+                withAnimation(Theme.Motion.gentle) {
+                    proxy.scrollTo(row, anchor: .center)
+                }
+            }
+            }
         }
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
-                .fill(Theme.Palette.paper)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
-        .overlay(
-            // A hairline edge instead of a drop shadow: on the page-coloured
-            // card a shadow reads as a smudge, while a thin rule reads as the
-            // edge of a sheet of paper.
-            RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
-                .strokeBorder(Color.black.opacity(0.10), lineWidth: 0.5)
-        )
+        // Edge to edge, no card. Sheet music is a page, not a widget: framing
+        // it in a rounded, shadowed card wasted width the notation needed and
+        // made the score look like a component rather than something to read.
+        .background(Theme.Palette.paper)
     }
 }
