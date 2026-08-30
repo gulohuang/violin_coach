@@ -54,22 +54,10 @@ struct ScoreCanvasView: View {
 
     private var metrics: ScoreRenderer.Metrics { .init(noteSize: noteSize) }
 
-    /// Invisible scroll targets spaced down each row.
-    ///
-    /// `ScrollViewReader` can only align to a *view*, so with one id per row
-    /// the finest move auto-scroll can make is a whole row — nothing happens
-    /// for a dozen notes and then the score lurches a full system. Laying
-    /// several targets down each row lets the follow move in small steps that
-    /// run into each other, which is what reads as smooth.
-    private static let scrollAnchorsPerRow = 8
-
-    /// Last anchor scrolled to, so repeat notes inside one step don't restart
-    /// the animation on top of itself.
-    @State private var scrollAnchor: String?
-
-    private static func anchorID(row: Int, step: Int) -> String {
-        "row-\(row)-step-\(step)"
-    }
+    /// Row the follow last moved to. Auto-scroll fires only when this changes,
+    /// so the score holds completely still while you play through a system —
+    /// notation shifting under your eyes mid-phrase is worse than a page turn.
+    @State private var scrolledRow: Int?
 
     var body: some View {
         GeometryReader { geo in
@@ -94,25 +82,6 @@ struct ScoreCanvasView: View {
                             )
                         }
                         .frame(width: width, height: metrics.rowHeight)
-                        // Positioned with padding rather than `.offset`, which
-                        // is a draw-time transform the scroll reader wouldn't
-                        // see. `.id` goes on the 1pt marker itself, before the
-                        // padding, so the scroll target is the marker and not
-                        // the tall padded box around it.
-                        .overlay(alignment: .topLeading) {
-                            ZStack(alignment: .topLeading) {
-                                ForEach(0..<Self.scrollAnchorsPerRow, id: \.self) { step in
-                                    Color.clear
-                                        .frame(width: 1, height: 1)
-                                        .id(Self.anchorID(row: rowIndex, step: step))
-                                        .padding(.top, Double(step)
-                                                 * (metrics.rowHeight - 1)
-                                                 / Double(Self.scrollAnchorsPerRow - 1))
-                                }
-                            }
-                            .frame(width: 1, height: metrics.rowHeight, alignment: .topLeading)
-                            .allowsHitTesting(false)
-                        }
                         // Hit-testing runs off the same row arithmetic the
                         // renderer uses, so no formatted layout has to escape
                         // the draw closure. The tap's y is row-local, so it's
@@ -131,32 +100,31 @@ struct ScoreCanvasView: View {
                             ) else { return }
                             onSelectNote(index)
                         }
+                        .id(rowIndex)
                     }
                 }
                 .padding(.vertical, metrics.topMargin)
             }
-            // Follow the cursor *through* its row, not just onto it. Aiming at
-            // the sub-row anchor nearest the cursor means the score creeps up
-            // by a fraction of a system every few notes and is already most of
-            // the way to the next row when the cursor gets there — instead of
-            // sitting still and then jumping a whole system at the line break.
+            // Follow only across a line break, never within a row. Once the
+            // system you're playing is on screen it stays put: creeping it
+            // upward note by note moves the notation you're currently reading,
+            // which is far more distracting than the one move at the break.
             //
-            // Anchored centre throughout, so the note being played stays around
-            // mid-screen with context above and below.
+            // Anchored centre so the new row lands mid-screen with context
+            // above and below, rather than at the very top where you can't see
+            // what's coming.
             .onChange(of: currentPlayableIndex) { index in
                 guard autoScroll, index >= 0 else { return }
-                guard let position = ScoreRenderer.rowPosition(
+                guard let row = ScoreRenderer.rowIndex(
                     forPlayableIndex: index,
                     score: score,
                     availableWidth: width,
                     metrics: metrics
                 ) else { return }
-                let step = Int((position.fraction * Double(Self.scrollAnchorsPerRow - 1)).rounded())
-                let anchor = Self.anchorID(row: position.row, step: step)
-                guard anchor != scrollAnchor else { return }
-                scrollAnchor = anchor
+                guard row != scrolledRow else { return }
+                scrolledRow = row
                 withAnimation(Theme.Motion.follow) {
-                    proxy.scrollTo(anchor, anchor: .center)
+                    proxy.scrollTo(row, anchor: .center)
                 }
             }
             }

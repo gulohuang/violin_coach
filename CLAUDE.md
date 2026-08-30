@@ -240,16 +240,13 @@ Simulator audio input is often silent by default — check
   first, and rows packed by content. Note size, tempo and auto-scroll are user
   controls (`ScoreControlsBar`), so anything size-dependent must derive from
   `Metrics.staveSpace` rather than being hardcoded.
-- **Auto-scroll aims at sub-row anchors, not at rows.** `ScrollViewReader`
-  can only align to a view, so one id per row makes a whole system the
-  smallest possible move: nothing happens for a dozen notes, then the score
-  lurches a full row. `ScoreCanvasView` overlays each row with eight invisible
-  1pt markers and `ScoreRenderer.rowPosition` reports how far through a row a
-  note is, so the follow advances a fraction of a system every few notes.
-  Positioned with `.padding`, never `.offset` — offset is a draw-time
-  transform the scroll reader doesn't see. The animation is a short ease
-  (`Theme.Motion.follow`), not a spring: these steps arrive back to back and a
-  spring's overshoot turns a run of them into a stutter.
+- **Auto-scroll moves at line breaks only.** `ScoreCanvasView` tracks the row
+  it last scrolled to and fires only when `ScoreRenderer.rowIndex` changes, so
+  the system you're playing holds completely still and the score moves once,
+  at the break. Following the cursor continuously *within* a row was tried and
+  is worse: it shifts the notation you are reading right now. The animation is
+  a short ease (`Theme.Motion.follow`), not a spring — a spring's overshoot
+  and settle read as a lurch on a move this large.
 - **Rows render lazily, one `Canvas` each.** Drawing the whole score into a
   single tall canvas rebuilt every stave, note, beam and slur on every scroll
   frame. A slur spanning a line break is the one casualty — printed music
