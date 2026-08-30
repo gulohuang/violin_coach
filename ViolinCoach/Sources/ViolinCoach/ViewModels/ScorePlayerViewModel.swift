@@ -21,6 +21,9 @@ public final class ScorePlayerViewModel: ObservableObject {
     @Published public var autoScroll = true
 
     private var cancellables = Set<AnyCancellable>()
+    /// Which score is currently loaded, so returning to the same one from the
+    /// folder doesn't re-parse it — and switching to a different one does.
+    private var loadedEntryID: String?
 
     public init(player: ScoreAudioPlayer = ScoreAudioPlayer()) {
         self.player = player
@@ -30,7 +33,6 @@ public final class ScorePlayerViewModel: ObservableObject {
         player.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
-        load()
     }
 
     public var isPlaying: Bool {
@@ -41,13 +43,24 @@ public final class ScorePlayerViewModel: ObservableObject {
         player.stop()
     }
 
-    public func load() {
-        switch ScoreLibrary.loadBundledSample() {
+    /// Whether `score` is this entry's. The view checks it before rendering,
+    /// so pushing a second score never shows a frame of the previous one under
+    /// the new title while `onAppear` catches up.
+    public func isLoaded(_ entry: ScoreEntry) -> Bool { loadedEntryID == entry.id }
+
+    public func load(_ entry: ScoreEntry) {
+        guard loadedEntryID != entry.id else { return }
+        player.stop()
+        loadedEntryID = entry.id
+        switch ScoreLibrary.load(entry) {
         case .success(let score):
             self.score = score
+            // Each score brings its own marking; the tempo the user set for
+            // the last piece has nothing to do with this one.
             self.tempoBPM = score.tempoBPM
             self.loadError = nil
         case .failure(let error):
+            self.score = nil
             self.loadError = error.localizedDescription
         }
     }

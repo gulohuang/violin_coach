@@ -77,6 +77,10 @@ public final class PracticeViewModel: ObservableObject {
     /// also keeps the progress bar moving smoothly between readings.
     private var tickCancellable: AnyCancellable?
 
+    /// Which score is loaded, so coming back to the same piece from the folder
+    /// keeps your place in it and switching pieces starts clean.
+    private var loadedEntryID: String?
+
     public init(detector: PitchDetector = PitchDetector()) {
         self.detector = detector
         // Practice leans permissive on purpose. Here the app already knows
@@ -85,19 +89,31 @@ public final class PracticeViewModel: ObservableObject {
         // cost of a marginal reading is low, while missing a real note the
         // player did sound is the failure that actually feels broken.
         detector.sensitivity = .highest
-        load()
         cancellable = detector.$frequency.sink { [weak self] frequency in
             self?.handle(frequency: frequency)
         }
     }
 
-    public func load() {
-        switch ScoreLibrary.loadBundledSample() {
+    /// Whether `score` is this entry's — see `ScorePlayerViewModel.isLoaded`.
+    public func isLoaded(_ entry: ScoreEntry) -> Bool { loadedEntryID == entry.id }
+
+    public func load(_ entry: ScoreEntry) {
+        guard loadedEntryID != entry.id else { return }
+        stop()
+        loadedEntryID = entry.id
+        // A section, a cursor position and a loop count all belong to the
+        // piece they were chosen in; carrying them into a different score
+        // would point them at bars that mean something else.
+        clearSection()
+        currentIndex = -1
+        isComplete = false
+        switch ScoreLibrary.load(entry) {
         case .success(let score):
             self.score = score
             self.tempoBPM = score.tempoBPM
             loadError = nil
         case .failure(let error):
+            self.score = nil
             loadError = error.localizedDescription
         }
     }

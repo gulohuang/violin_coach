@@ -4,36 +4,55 @@ import SwiftUI
 /// along, note by note, driven directly by `ScoreAudioPlayer.currentIndex`.
 struct ScorePlayerView: View {
     @StateObject private var viewModel = ScorePlayerViewModel()
+    @StateObject private var library = ScoreLibraryViewModel()
 
     var body: some View {
+        // The tab opens on the folder and pushes the player. Using a real
+        // `NavigationStack` push rather than swapping the root view is what
+        // gives the back button, the swipe-back gesture and the title
+        // animation without any of them being hand-built.
         NavigationStack {
-            Group {
-                if let score = viewModel.score {
-                    loaded(score: score)
-                } else if let error = viewModel.loadError {
-                    ScoreUnavailableView(title: "Couldn't load score", message: error)
-                } else {
-                    ProgressView()
+            ScoreLibraryView(library: library, prompt: "Choose a score to play")
+                .navigationTitle("Scores")
+                .background(Theme.Palette.background.ignoresSafeArea())
+                .navigationDestination(for: ScoreEntry.self) { entry in
+                    player(for: entry)
                 }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Theme.Palette.background.ignoresSafeArea())
-            .navigationTitle("Score Player")
         }
+        .onDisappear { viewModel.stop() }
+    }
+
+    private func player(for entry: ScoreEntry) -> some View {
+        Group {
+            if let score = viewModel.score, viewModel.isLoaded(entry) {
+                loaded(score: score)
+            } else if let error = viewModel.loadError, viewModel.isLoaded(entry) {
+                ScoreUnavailableView(title: "Couldn't load score", message: error)
+            } else {
+                ProgressView()
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Theme.Palette.background.ignoresSafeArea())
+        .navigationTitle(entry.title)
+        .navigationBarTitleDisplayMode(.inline)
+        // Loading here rather than in the view model's init: the score to open
+        // isn't known until one is picked.
+        .onAppear { viewModel.load(entry) }
+        // Leaving the screen silences playback. Without this a score keeps
+        // sounding from the folder listing, which is baffling.
         .onDisappear { viewModel.stop() }
     }
 
     private func loaded(score: Score) -> some View {
         VStack(spacing: Theme.Spacing.lg) {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                    Text(score.title)
-                        .font(.title3.weight(.semibold))
-                    Text("\(score.beatsPerMeasure)/\(score.beatType) · \(score.playableNotes.count) notes")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                // The title lives in the navigation bar now that the score is
+                // something you navigated to, so this is just the details.
+                Text("\(score.beatsPerMeasure)/\(score.beatType) · \(score.playableNotes.count) notes")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
                 // Greedy: the score takes whatever height is left above the
                 // transport and scrolls internally, so no Spacer here.

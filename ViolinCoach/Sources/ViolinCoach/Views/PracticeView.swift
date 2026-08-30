@@ -6,6 +6,7 @@ import SwiftUI
 /// you've held the right pitch for a moment (see `PracticeViewModel`).
 struct PracticeView: View {
     @StateObject private var viewModel = PracticeViewModel()
+    @StateObject private var library = ScoreLibraryViewModel()
 
     /// Controls hide once practice starts, so the score gets the whole screen
     /// — you're reading music at that point, not adjusting settings. Tapping
@@ -13,20 +14,43 @@ struct PracticeView: View {
     @State private var showsControls = true
 
     var body: some View {
+        // Same shape as the player tab: the folder is the root, a score is a
+        // push, and the system back button is the way out. The navigation bar
+        // deliberately stays visible while practising even though the controls
+        // fade — it's the only route back to the folder.
         NavigationStack {
-            Group {
-                if let score = viewModel.score {
-                    loaded(score: score)
-                } else if let error = viewModel.loadError {
-                    ScoreUnavailableView(title: "Couldn't load score", message: error)
-                } else {
-                    ProgressView()
+            ScoreLibraryView(library: library, prompt: "Choose a score to practise")
+                .navigationTitle("Scores")
+                .background(Theme.Palette.background.ignoresSafeArea())
+                .navigationDestination(for: ScoreEntry.self) { entry in
+                    practice(for: entry)
                 }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Theme.Palette.background.ignoresSafeArea())
-            .navigationTitle("Practice")
         }
+        .onDisappear { viewModel.stop() }
+    }
+
+    private func practice(for entry: ScoreEntry) -> some View {
+        Group {
+            if let score = viewModel.score, viewModel.isLoaded(entry) {
+                loaded(score: score)
+            } else if let error = viewModel.loadError, viewModel.isLoaded(entry) {
+                ScoreUnavailableView(title: "Couldn't load score", message: error)
+            } else {
+                ProgressView()
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Theme.Palette.background.ignoresSafeArea())
+        .navigationTitle(entry.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            viewModel.load(entry)
+            // A new screen starts with its controls showing, whatever state
+            // the last session left them in.
+            showsControls = !viewModel.isActive
+        }
+        // Going back releases the microphone. Leaving it live behind a folder
+        // listing would keep the recording indicator on for no reason.
         .onDisappear { viewModel.stop() }
     }
 

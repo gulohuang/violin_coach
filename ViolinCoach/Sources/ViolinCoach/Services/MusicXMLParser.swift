@@ -59,6 +59,22 @@ public final class MusicXMLParser: NSObject, XMLParserDelegate {
         try parse(data: try Data(contentsOf: url))
     }
 
+    /// Reads just the piece's title, for a library listing.
+    ///
+    /// Worth its own pass: a listing needs one line of text per file, and
+    /// running the full parser to get it would engrave every note of every
+    /// score in the folder before anything appeared on screen. This one stops
+    /// as soon as the header is behind it.
+    public static func parseTitle(contentsOf url: URL) -> String? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let scanner = TitleScanner()
+        let xmlParser = XMLParser(data: data)
+        xmlParser.delegate = scanner
+        xmlParser.parse()
+        let title = scanner.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (title?.isEmpty ?? true) ? nil : title
+    }
+
     // MARK: - Parse state
 
     private var parseError: Error?
@@ -280,5 +296,53 @@ public final class MusicXMLParser: NSObject, XMLParserDelegate {
     static func midiNumber(step: String, alter: Int, octave: Int) -> Int? {
         guard let base = stepSemitones[step.uppercased()] else { return nil }
         return (octave + 1) * 12 + base + alter
+    }
+}
+
+/// Header-only pass used by `MusicXMLParser.parseTitle`. Prefers `<work-title>`
+/// and settles for `<movement-title>`, which is what engraving programs fill in
+/// when a piece has no separate work heading.
+private final class TitleScanner: NSObject, XMLParserDelegate {
+    private(set) var title: String?
+    private var movementTitle: String?
+    private var text = ""
+
+    func parser(
+        _ parser: XMLParser,
+        didStartElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?,
+        attributes attributeDict: [String: String] = [:]
+    ) {
+        // Everything worth reading precedes the first part, so there's no
+        // reason to walk the notes.
+        if elementName == "part" {
+            if title == nil { title = movementTitle }
+            parser.abortParsing()
+            return
+        }
+        text = ""
+    }
+
+    func parser(_ parser: XMLParser, foundCharacters string: String) {
+        text += string
+    }
+
+    func parser(
+        _ parser: XMLParser,
+        didEndElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?
+    ) {
+        switch elementName {
+        case "work-title": if title == nil { title = text }
+        case "movement-title": if movementTitle == nil { movementTitle = text }
+        default: break
+        }
+        text = ""
+    }
+
+    func parserDidEndDocument(_ parser: XMLParser) {
+        if title == nil { title = movementTitle }
     }
 }

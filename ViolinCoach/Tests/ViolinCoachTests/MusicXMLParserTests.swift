@@ -108,6 +108,57 @@ final class MusicXMLParserTests: XCTestCase {
         XCTAssertThrowsError(try MusicXMLParser.parse(data: emptyXML.data(using: .utf8)!))
     }
 
+    // MARK: - Header-only title scan (library listing)
+
+    private func writeTemporary(_ xml: String, named name: String) throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(name)-\(UUID().uuidString).musicxml")
+        try xml.write(to: url, atomically: true, encoding: .utf8)
+        return url
+    }
+
+    func testParseTitleReadsWorkTitleWithoutParsingNotes() throws {
+        let url = try writeTemporary(Self.sampleXML, named: "work")
+        defer { try? FileManager.default.removeItem(at: url) }
+        XCTAssertEqual(MusicXMLParser.parseTitle(contentsOf: url), "Test Piece")
+    }
+
+    /// Engraving programs often leave `<work-title>` empty and fill in
+    /// `<movement-title>` instead, so the listing has to accept either.
+    func testParseTitleFallsBackToMovementTitle() throws {
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <score-partwise version="3.1">
+          <movement-title>Gavotte</movement-title>
+          <part-list><score-part id="P1"><part-name>Violin</part-name></score-part></part-list>
+          <part id="P1"><measure number="1"></measure></part>
+        </score-partwise>
+        """
+        let url = try writeTemporary(xml, named: "movement")
+        defer { try? FileManager.default.removeItem(at: url) }
+        XCTAssertEqual(MusicXMLParser.parseTitle(contentsOf: url), "Gavotte")
+    }
+
+    /// A file with no title at all yields nil, so the library can fall back to
+    /// the filename rather than printing an empty row.
+    func testParseTitleReturnsNilWhenAbsent() throws {
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <score-partwise version="3.1">
+          <part-list><score-part id="P1"><part-name>Violin</part-name></score-part></part-list>
+          <part id="P1"><measure number="1"></measure></part>
+        </score-partwise>
+        """
+        let url = try writeTemporary(xml, named: "untitled")
+        defer { try? FileManager.default.removeItem(at: url) }
+        XCTAssertNil(MusicXMLParser.parseTitle(contentsOf: url))
+    }
+
+    func testParseTitleReturnsNilForAMissingFile() {
+        let url = URL(fileURLWithPath: "/nonexistent/nope.musicxml")
+        XCTAssertNil(MusicXMLParser.parseTitle(contentsOf: url))
+    }
+
     // MARK: - Notation
 
     static let notationXML = """

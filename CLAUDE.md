@@ -2,6 +2,7 @@
 
 A lightweight iOS violin practice app: chromatic tuner, score playback with a
 following cursor, and note-by-note practice with real-time pitch feedback.
+Both score tabs open on a folder of saved scores.
 
 ## ⚠️ Verification status — read this first
 
@@ -65,6 +66,13 @@ Layering, strictly one-directional (`Views → ViewModels → Services → Model
 | Score Player | `ScorePlayerView` | `ScorePlayerViewModel` | `ScoreAudioPlayer` → `ToneSynthesizer` |
 | Practice | `PracticeView` | `PracticeViewModel` | `PitchDetector` + `ScoreRenderer` |
 
+Both score tabs open on a **folder** (`ScoreLibraryView` + `ScoreLibraryViewModel`)
+listing every saved score; picking one pushes that tab's screen inside a
+`NavigationStack`, so the back button, the swipe-back gesture and the title
+transition are the system's rather than hand-built. Each tab keeps its own
+`ScoreLibraryViewModel` — they're separate stacks, and one tab rescanning after
+an import shouldn't move the other tab's list.
+
 ### The one invariant worth knowing
 
 `Score.playableNotes` (non-rest notes, in order) defines a single index space
@@ -105,6 +113,22 @@ numbering.
   the whole point. Practice defaults to `.highest`: it already knows which
   note it wants, and the ±38 cent window plus three consecutive readings do
   the filtering.
+- **A violin timbre, synthesised from body resonances.** A bowed string moves
+  in Helmholtz motion, whose spectrum is essentially a sawtooth — every
+  harmonic, falling as 1/n — and the *instrument* is the wooden box that
+  shapes it. `ToneSynthesizer` weights each harmonic by a fixed response with
+  peaks at the A0 air mode (~280 Hz), the main wood modes (~460, ~700 Hz) and
+  the broad bridge hill (~2.8 kHz). Fixed in absolute frequency is the whole
+  point: it's why a low G and a high E sound like one instrument, and it
+  reproduces the real effect that the G string's second harmonic comes out
+  stronger than its fundamental (392 Hz lands on the wood resonance) — the very
+  timbre YIN was chosen to handle. On top of that: a ~55 ms bowed attack (a
+  15 ms one reads as plucked), vibrato at 5.5 Hz / ±16 cents fading in after
+  the note speaks, and a breath of bow noise in the attack only. Rendering is a
+  cached wavetable read rather than a per-sample sum of sines — far cheaper,
+  and changing the read rate is exactly how vibrato should work, moving every
+  harmonic together. Verified numerically before it was written: peak 0.62 (no
+  clipping), and RMS within 1.4× across three octaves so no note jumps out.
 - **Hand-rolled MusicXML parser** (`Foundation.XMLParser`, SAX-style). Keeps
   VexFoundation as the only third-party dependency. MusicXML is just XML;
   staff engraving is the genuinely hard part worth a dependency.
@@ -158,8 +182,9 @@ violin_coach/
 │   │   ├── Services/            # MusicXMLParser, PitchMath, PitchDetector,
 │   │   │                        # ToneSynthesizer, ScoreAudioPlayer, ScoreLibrary
 │   │   ├── Notation/ScoreRenderer.swift
-│   │   ├── ViewModels/          # Tuner, ScorePlayer, Practice
-│   │   ├── Views/               # ContentView (TabView) + 3 tabs + ScoreCanvasView
+│   │   ├── ViewModels/          # Tuner, ScorePlayer, Practice, ScoreLibrary
+│   │   ├── Views/               # ContentView (TabView) + 3 tabs +
+│   │   │                        # ScoreLibraryView (the folder) + ScoreCanvasView
 │   │   └── Resources/gavotte.musicxml
 │   └── Tests/ViolinCoachTests/  # XCTest — NEVER RUN, see above
 └── app/                         # web prototype (VERIFIED: builds, 12 tests pass)
@@ -251,11 +276,17 @@ Simulator audio input is often silent by default — check
   single tall canvas rebuilt every stave, note, beam and slur on every scroll
   frame. A slur spanning a line break is the one casualty — printed music
   breaks those anyway.
-- **One bundled score** — Gavotte (P. Martini), 89 bars of single-voice
-  violin, extracted from its `.mxl` (a zip container) at authoring time. The
-  parser reads plain MusicXML only; `.mxl` support would mean adding archive
-  handling. A file-import flow on top of `MusicXMLParser.parse(contentsOf:)`
-  is the natural next step.
+- **The score library is the bundle plus `Documents/Scores`.** `ScoreLibrary`
+  merges both; imports land in Documents (not Caches — they're the player's own
+  files and mustn't be evicted under storage pressure) via `.fileImporter`, and
+  are parsed *before* being saved so a bad file fails at the picker rather than
+  becoming a row that errors on every tap. Listing uses
+  `MusicXMLParser.parseTitle`, a header-only pass that aborts at the first
+  `<part>` — running the full parser would engrave every note of every score in
+  the folder before anything appeared. **Uncompressed MusicXML only**: `.mxl` is
+  a zip container and supporting it means adding archive handling. Ships with
+  one score, Gavotte (P. Martini), 89 bars of single-voice violin, extracted
+  from its `.mxl` at authoring time.
 - **Never set a fill or stroke style before `factory.draw()`.** The render
   context is stateful, so a style set while laying out staves is still current
   when VexFoundation engraves the notation and will tint the noteheads with
@@ -267,8 +298,9 @@ Simulator audio input is often silent by default — check
   breath marks, and non-primary beam levels. Notation lives on `ScoreNote`
   but never feeds practice or playback — those read only `midi` and
   `beatsInQuarters`, so engraving can change without touching either.
-- **Synthesized tone, not sampled violin** — a harmonic stack with an
-  envelope, chosen to keep the app dependency-free and small.
+- **Synthesised violin, not a sampled one** — see the body-resonance synth
+  above. A usable multi-sampled library is tens of megabytes and several
+  licences, against a brief that asks for a lightweight app.
 
 ## Conventions
 
