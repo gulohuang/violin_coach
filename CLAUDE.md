@@ -1,8 +1,8 @@
 # ViolinCoach
 
-A lightweight iOS violin practice app: chromatic tuner, score playback with a
-following cursor, and note-by-note practice with real-time pitch feedback.
-Both score tabs open on a folder of saved scores.
+A lightweight iOS violin practice app: chromatic tuner, generated scales,
+score playback with a following cursor, and note-by-note practice with
+real-time pitch feedback. Both score tabs open on a folder of saved scores.
 
 ## ⚠️ Verification status — read this first
 
@@ -58,11 +58,12 @@ Layering, strictly one-directional (`Views → ViewModels → Services → Model
   no view touches a Service directly except through its ViewModel.
 - **Views** (`Sources/ViolinCoach/Views/`) — SwiftUI, as dumb as practical.
 
-### The three tabs
+### The four tabs
 
 | Tab | View | ViewModel | Engine |
 |---|---|---|---|
 | Tuner | `TunerView` | `TunerViewModel` | `PitchDetector` → `PitchMath` |
+| Scale | `ScaleView` | `ScaleViewModel` | `ScaleGenerator` → `ScoreAudioPlayer` |
 | Score Player | `ScorePlayerView` | `ScorePlayerViewModel` | `ScoreAudioPlayer` → `ToneSynthesizer` |
 | Practice | `PracticeView` | `PracticeViewModel` | `PitchDetector` + `ScoreRenderer` |
 
@@ -129,6 +130,19 @@ numbering.
   and changing the read rate is exactly how vibrato should work, moving every
   harmonic together. Verified numerically before it was written: peak 0.62 (no
   clipping), and RMS within 1.4× across three octaves so no note jumps out.
+- **A scale is a generated `Score`, not a separate code path.**
+  `ScaleGenerator` emits the same model MusicXML parses into, so the Scale tab
+  gets notation, playback, the following cursor, tempo and note-size controls
+  from machinery that already exists. Spelling is the whole difficulty and it
+  is done by *letter*, not by pitch class: a diatonic scale uses each letter
+  once and in order, and the alteration is whatever bends that letter to the
+  interval. That one rule is what yields F♯ in G major, G♯ (never A♭) as the
+  leading tone of A harmonic minor, and the F𝄪 that G♯ harmonic minor
+  genuinely needs. Minor keys carry the relative major's signature, three
+  steps flatward, which is what makes the harmonic and melodic forms print
+  their raised degrees as accidentals rather than swallowing them. The octave
+  count is computed per key, not fixed at three: the top of the violin is a
+  fixed pitch, so three octaves of G fits and three of F♯ does not.
 - **Hand-rolled MusicXML parser** (`Foundation.XMLParser`, SAX-style). Keeps
   VexFoundation as the only third-party dependency. MusicXML is just XML;
   staff engraving is the genuinely hard part worth a dependency.
@@ -180,10 +194,12 @@ violin_coach/
 │   │   ├── ViolinCoachApp.swift # @main
 │   │   ├── Models/Score.swift
 │   │   ├── Services/            # MusicXMLParser, PitchMath, PitchDetector,
-│   │   │                        # ToneSynthesizer, ScoreAudioPlayer, ScoreLibrary
+│   │   │                        # ToneSynthesizer, ScoreAudioPlayer,
+│   │   │                        # ScoreLibrary, ScaleGenerator
 │   │   ├── Notation/ScoreRenderer.swift
-│   │   ├── ViewModels/          # Tuner, ScorePlayer, Practice, ScoreLibrary
-│   │   ├── Views/               # ContentView (TabView) + 3 tabs +
+│   │   ├── ViewModels/          # Tuner, Scale, ScorePlayer, Practice,
+│   │   │                        # ScoreLibrary
+│   │   ├── Views/               # ContentView (TabView) + 4 tabs +
 │   │   │                        # ScoreLibraryView (the folder) + ScoreCanvasView
 │   │   └── Resources/gavotte.musicxml
 │   └── Tests/ViolinCoachTests/  # XCTest — NEVER RUN, see above

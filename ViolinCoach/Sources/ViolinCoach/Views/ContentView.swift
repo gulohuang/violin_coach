@@ -6,6 +6,9 @@ struct ContentView: View {
             TunerView()
                 .tabItem { Label("Tuner", systemImage: "tuningfork") }
 
+            ScaleView()
+                .tabItem { Label("Scale", systemImage: "music.note.list") }
+
             ScorePlayerView()
                 .tabItem { Label("Score Player", systemImage: "play.circle") }
 
