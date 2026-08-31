@@ -17,8 +17,47 @@ public enum PitchDirection: Equatable {
 /// enough" scales with the note's written duration — so a half note has to be
 /// sustained and a sixteenth doesn't. Pitch alone would let you skate through
 /// a slow passage at any speed you liked.
+///
+/// Once a note is satisfied a short gate closes — half the length that note
+/// was written to sound for — before the next one starts being graded, so one
+/// long bow can't be counted twice. How close counts as "the right pitch" is
+/// the player's own choice, see `MatchTolerance`.
 @MainActor
 public final class PracticeViewModel: ObservableObject {
+
+    /// How close to the written pitch counts as playing the note.
+    ///
+    /// The values are chosen against what a violinist can actually hear and
+    /// control: 50 cents is "nearer this note than either neighbour", which is
+    /// the loosest setting that still means anything; 20 is around where a
+    /// trained ear starts calling a note out of tune in context; 10 is inside
+    /// the width of an ordinary vibrato, so it demands a genuinely centred,
+    /// steady note.
+    public enum MatchTolerance: String, CaseIterable, Identifiable, Sendable {
+        case easy, medium, hard, professional
+
+        public var id: String { rawValue }
+
+        public var label: String {
+            switch self {
+            case .easy: return "Easy"
+            case .medium: return "Medium"
+            case .hard: return "Hard"
+            case .professional: return "Professional"
+            }
+        }
+
+        /// Cents either side of the written pitch that still count as in tune.
+        public var cents: Double {
+            switch self {
+            case .easy: return 50
+            case .medium: return 35
+            case .hard: return 20
+            case .professional: return 10
+            }
+        }
+    }
+
     @Published public private(set) var score: Score?
     @Published public private(set) var loadError: String?
     /// Index into `score.playableNotes` of the note we're waiting for. -1 = not started.
@@ -47,11 +86,15 @@ public final class PracticeViewModel: ObservableObject {
     /// Keep the row being practised centred on screen.
     @Published public var autoScroll = true
 
+    /// How strict the pitch match is. The player's choice, so a beginner can
+    /// get through a piece and an advanced player can be held to intonation
+    /// that would actually pass in a lesson.
+    @Published public var matchTolerance: MatchTolerance = .medium
+
     public let detector: PitchDetector
 
-    /// How far off pitch still counts. Loose enough for bow and vibrato
-    /// wobble, tight enough to mean something.
-    private let centsTolerance = 38.0
+    /// How far off pitch still counts, in cents either side of the written note.
+    private var centsTolerance: Double { matchTolerance.cents }
 
     /// Fraction of a note's written duration you must sustain it for.
     /// Demanding the full value would punish the normal gap between bows;
@@ -66,8 +109,26 @@ public final class PracticeViewModel: ObservableObject {
     /// detection flickers, especially across a bow change.
     private let holdGrace: TimeInterval = 0.15
 
+    /// After a note is satisfied, input is ignored for half the length that
+    /// note was written to sound for.
+    ///
+    /// Without it a single sustained bow can satisfy two notes in a row — most
+    /// obviously on a repeated pitch, where the sound that completed one note
+    /// is still going and immediately completes the next. The gate makes the
+    /// player re-articulate. Half the written value is the request; the clamp
+    /// is so a whole note doesn't lock the screen for two seconds and a
+    /// sixteenth isn't gated by a time too short to matter.
+    private let refractoryFraction = 0.5
+    private let minimumRefractory: TimeInterval = 0.06
+    private let maximumRefractory: TimeInterval = 0.6
+    /// When the gate opens. Nil means input is being accepted.
+    private var acceptInputAfter: Date?
+
     private var holdStart: Date?
     private var lastInTuneAt: Date?
+    /// Last pitch the detector reported, held so the hold clock can keep
+    /// evaluating between readings — see `tickCancellable`.
+    private var latestFrequency: Double?
     private var cancellable: AnyCancellable?
     /// Drives the hold clock independently of reading arrival.
     ///
@@ -84,7 +145,7 @@ public final class PracticeViewModel: ObservableObject {
     public init(detector: PitchDetector = PitchDetector()) {
         self.detector = detector
         // Practice leans permissive on purpose. Here the app already knows
-        // which note it's waiting for, and the ±38 cent window plus the
+        // which note it's waiting for, and the cents window plus the
         // sustain requirement filter out spurious detections anyway — so the
         // cost of a marginal reading is low, while missing a real note the
         // player did sound is the failure that actually feels broken.
@@ -184,6 +245,9 @@ public final class PracticeViewModel: ObservableObject {
             if let range = sectionNoteRange { currentIndex = range.lowerBound }
             direction = nil
             resetHold()
+            // A deliberate jump isn't a note that just finished sounding, so
+            // there's nothing to wait out — start listening immediately.
+            acceptInputAfter = nil
             isComplete = false
             return
         }
@@ -191,6 +255,7 @@ public final class PracticeViewModel: ObservableObject {
         currentIndex = clamped
         direction = nil
         resetHold()
+        acceptInputAfter = nil
         isComplete = false
     }
 
@@ -208,6 +273,8 @@ public final class PracticeViewModel: ObservableObject {
         direction = nil
         isComplete = false
         resetHold()
+        acceptInputAfter = nil
+        latestFrequency = nil
         loopCount = 0
         isActive = true
         tickCancellable = Timer.publish(every: 0.05, on: .main, in: .common)
@@ -221,6 +288,8 @@ public final class PracticeViewModel: ObservableObject {
         tickCancellable = nil
         detector.stop()
         resetHold()
+        acceptInputAfter = nil
+        latestFrequency = nil
         // The cursor stays where it is rather than resetting to -1, so a spot
         // chosen by tapping — or simply where you got to — survives a stop and
         // Start resumes from there.
@@ -252,13 +321,53 @@ public final class PracticeViewModel: ObservableObject {
     }
 
     private func handle(frequency: Double?) {
-        guard isActive, let expected = expectedNote, let frequency else {
+        latestFrequency = frequency
+        evaluate()
+    }
+
+    private func tick() {
+        guard isActive else { return }
+        objectWillChange.send() // keeps holdProgress live
+        // Re-run the comparison on every tick, not only when a reading
+        // arrives. Two things depend on it: the detector suppresses readings
+        // identical to the last one, so a steady note stops publishing; and
+        // the refractory gate opens on a clock, so nothing would notice it had
+        // opened if the player were already holding the next note.
+        evaluate()
+        guard let holdStart, direction == .inTune else { return }
+        if Date().timeIntervalSince(holdStart) >= requiredHold {
+            advance()
+        }
+    }
+
+    /// Compares the last known pitch against the note the cursor is on.
+    private func evaluate() {
+        guard isActive, let expected = expectedNote else {
             direction = nil
             resetHold()
             return
         }
 
         let now = Date()
+
+        // Still inside the gap after the previous note. Report nothing rather
+        // than "too high"/"too low": the player hasn't been asked for this
+        // note yet, so grading them on it would be noise.
+        if let gateEnd = acceptInputAfter {
+            if now < gateEnd {
+                direction = nil
+                resetHold()
+                return
+            }
+            acceptInputAfter = nil
+        }
+
+        guard let frequency = latestFrequency else {
+            direction = nil
+            resetHold()
+            return
+        }
+
         let targetFrequency = PitchMath.midiToFrequency(expected.midi, a4: detector.a4Reference)
         let cents = PitchMath.cents(from: frequency, to: targetFrequency)
 
@@ -282,21 +391,38 @@ public final class PracticeViewModel: ObservableObject {
         // Completion is decided by the ticker, not here — see tickCancellable.
     }
 
-    private func tick() {
-        guard isActive else { return }
-        objectWillChange.send() // keeps holdProgress live
-        guard let holdStart, direction == .inTune else { return }
-        if Date().timeIntervalSince(holdStart) >= requiredHold {
-            advance()
-        }
-    }
-
     private func resetHold() {
         holdStart = nil
         lastInTuneAt = nil
     }
 
+    /// True while the gate after a completed note is still shut. The view uses
+    /// it to say why nothing is being graded rather than looking frozen.
+    public var isWaitingForNextNote: Bool {
+        guard let gateEnd = acceptInputAfter else { return false }
+        return Date() < gateEnd
+    }
+
+    /// `direction` in the form the notation layer draws. Nothing is marked for
+    /// an in-tune note: the cursor already says where you are, and a marker
+    /// that's always present stops meaning anything.
+    public var cursorDeviation: ScoreRenderer.CursorDeviation? {
+        switch direction {
+        case .tooHigh: return .sharp
+        case .tooLow: return .flat
+        case .inTune, nil: return nil
+        }
+    }
+
     private func advance() {
+        // The gate is measured against the note being *left*: that's the one
+        // still sounding, and its written length is how long it's expected to
+        // go on sounding for.
+        if let score, let finished = expectedNote {
+            let written = score.seconds(forBeats: finished.beatsInQuarters, tempoBPM: tempoBPM)
+            let gate = min(maximumRefractory, max(minimumRefractory, written * refractoryFraction))
+            acceptInputAfter = Date().addingTimeInterval(gate)
+        }
         resetHold()
         guard let score else { return }
         let nextIndex = currentIndex + 1

@@ -73,6 +73,9 @@ struct PracticeView: View {
                             viewModel.moveCursor(to: index)
                         }
                     },
+                    // Only while practising: outside a session the cursor is
+                    // just a "you are here", and there's no pitch to grade.
+                    cursorDeviation: viewModel.isActive ? viewModel.cursorDeviation : nil,
                     sectionMeasures: viewModel.sectionMeasures,
                     noteSize: viewModel.noteSize,
                     autoScroll: viewModel.autoScroll,
@@ -87,7 +90,7 @@ struct PracticeView: View {
                         autoScroll: $viewModel.autoScroll,
                         defaultTempoBPM: score.tempoBPM
                     )
-                    sectionBar
+                    practiceBar
                     ScoreProgressBar(
                         current: viewModel.currentIndex,
                         total: score.playableNotes.count
@@ -101,6 +104,7 @@ struct PracticeView: View {
             if viewModel.isActive || viewModel.isComplete {
                 FeedbackCard(
                     isComplete: viewModel.isComplete,
+                    isWaiting: viewModel.isWaitingForNextNote,
                     direction: viewModel.direction,
                     expectedNoteLabel: viewModel.expectedNoteLabel,
                     holdProgress: viewModel.holdProgress,
@@ -149,6 +153,44 @@ struct PracticeView: View {
                     .padding(.bottom, Theme.Spacing.sm)
                     .transition(.opacity)
             }
+        }
+    }
+
+    /// The practice-only row: which bars to drill, and how strict the pitch
+    /// match is. Neither belongs in `ScoreControlsBar` — that one is shared
+    /// with the player tab, which has nothing to grade.
+    private var practiceBar: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            sectionBar
+            toleranceButton
+        }
+    }
+
+    /// Pitch-matching standard. A `Menu` rather than a segmented control: four
+    /// names plus their cent windows don't fit across a phone, and this is a
+    /// set-once setting rather than something toggled mid-piece.
+    private var toleranceButton: some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            Menu {
+                Picker("Pitch matching", selection: $viewModel.matchTolerance) {
+                    ForEach(PracticeViewModel.MatchTolerance.allCases) { level in
+                        Text("\(level.label)  ±\(Int(level.cents))¢").tag(level)
+                    }
+                }
+            } label: {
+                Label("Matching: \(viewModel.matchTolerance.label)", systemImage: "target")
+                    .font(.subheadline.weight(.medium))
+                    .padding(.horizontal, Theme.Spacing.md)
+                    .padding(.vertical, Theme.Spacing.sm)
+                    .background(Capsule().fill(Theme.Palette.cardSurface))
+            }
+            .buttonStyle(.plain)
+
+            Text("±\(Int(viewModel.matchTolerance.cents)) cents")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+
+            Spacer()
         }
     }
 
@@ -209,6 +251,8 @@ struct PracticeView: View {
 /// this screen still works for colorblind players.
 private struct FeedbackCard: View {
     let isComplete: Bool
+    /// Inside the gap after a completed note, when nothing is being graded yet.
+    let isWaiting: Bool
     let direction: PitchDirection?
     let expectedNoteLabel: String
     /// 0...1 through the sustain required for this note.
@@ -282,6 +326,8 @@ private struct FeedbackCard: View {
     }
 
     private var symbolName: String {
+        // The gap between notes reads as unresponsiveness unless it says so.
+        if isWaiting { return "hourglass" }
         switch direction {
         case .tooHigh: return "arrow.down"   // play *lower* to correct a sharp note
         case .tooLow: return "arrow.up"
@@ -291,6 +337,7 @@ private struct FeedbackCard: View {
     }
 
     private var statusText: String {
+        if isWaiting { return "Next note…" }
         switch direction {
         case .tooHigh: return "Too high"
         case .tooLow: return "Too low"

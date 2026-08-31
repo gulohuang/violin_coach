@@ -44,6 +44,9 @@ struct ScoreCanvasView: View {
     /// Called with the playable-note index when the score is tapped. Nil makes
     /// the score non-interactive, which is what the player tab wants.
     var onSelectNote: ((Int) -> Void)?
+    /// Live intonation on the cursor note: a bar above it when sharp, below
+    /// when flat. Nil when in tune or when nothing is being graded.
+    var cursorDeviation: ScoreRenderer.CursorDeviation?
     /// Bars chosen for repeat practice, marked with a bracket at each end.
     var sectionMeasures: ClosedRange<Int>?
     var noteSize: ScoreRenderer.NoteSize = .medium
@@ -68,20 +71,17 @@ struct ScoreCanvasView: View {
             ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(spacing: metrics.rowGap) {
                     ForEach(0..<max(1, rowCount), id: \.self) { rowIndex in
-                        VexCanvas(width: width, height: metrics.rowHeight) { context in
-                            context.clear()
-                            ScoreRenderer.drawRow(
-                                score: score,
-                                rowIndex: rowIndex,
-                                into: context,
-                                availableWidth: width,
-                                cursorPlayableIndex: currentPlayableIndex >= 0 ? currentPlayableIndex : nil,
-                                sectionMeasures: sectionMeasures,
-                                tempoBPM: tempoBPM,
-                                metrics: metrics
-                            )
-                        }
-                        .frame(width: width, height: metrics.rowHeight)
+                        ScoreRowCanvas(
+                            score: score,
+                            rowIndex: rowIndex,
+                            width: width,
+                            currentPlayableIndex: currentPlayableIndex,
+                            cursorDeviation: cursorDeviation,
+                            sectionMeasures: sectionMeasures,
+                            tempoBPM: tempoBPM,
+                            metrics: metrics
+                        )
+                        .equatable()
                         // Hit-testing runs off the same row arithmetic the
                         // renderer uses, so no formatted layout has to escape
                         // the draw closure. The tap's y is row-local, so it's
@@ -133,5 +133,46 @@ struct ScoreCanvasView: View {
         // it in a rounded, shadowed card wasted width the notation needed and
         // made the score look like a component rather than something to read.
         .background(Theme.Palette.paper)
+    }
+}
+
+/// One engraved row, wrapped so SwiftUI can skip the work when nothing about
+/// the drawing has changed.
+///
+/// `Canvas`'s render closure is opaque to SwiftUI, so a `Canvas` is redrawn
+/// whenever its parent's body re-runs. That matters here because
+/// `PracticeViewModel` ticks at 20 Hz to keep the hold meter smooth: without
+/// this gate, every one of those ticks re-engraves every visible system —
+/// staves, notes, beams and slurs — to produce an identical image. Comparing
+/// the inputs first turns twenty redraws a second into one per actual change.
+private struct ScoreRowCanvas: View, Equatable {
+    let score: Score
+    let rowIndex: Int
+    let width: Double
+    let currentPlayableIndex: Int
+    let cursorDeviation: ScoreRenderer.CursorDeviation?
+    let sectionMeasures: ClosedRange<Int>?
+    let tempoBPM: Double?
+    let metrics: ScoreRenderer.Metrics
+
+    var body: some View {
+        VexCanvas(width: width, height: metrics.rowHeight) { context in
+            context.clear()
+            // Positions are only needed by the hit-test path, which
+            // recomputes them from the same plan rather than smuggling them
+            // out of a draw closure.
+            _ = ScoreRenderer.drawRow(
+                score: score,
+                rowIndex: rowIndex,
+                into: context,
+                availableWidth: width,
+                cursorPlayableIndex: currentPlayableIndex >= 0 ? currentPlayableIndex : nil,
+                cursorDeviation: cursorDeviation,
+                sectionMeasures: sectionMeasures,
+                tempoBPM: tempoBPM,
+                metrics: metrics
+            )
+        }
+        .frame(width: width, height: metrics.rowHeight)
     }
 }

@@ -68,6 +68,28 @@ public enum ScoreRenderer {
     /// paper, so it needs only a light-mode value.
     static let cursorCSS = "rgba(52, 92, 217, 0.20)"
 
+    /// Live intonation feedback on the note being practised: a bar above the
+    /// note when it's sharp, below when it's flat.
+    ///
+    /// Position, not colour, is what carries the meaning — a sharp note is
+    /// literally too high, so its marker sits above the staff and points where
+    /// the pitch has gone. That keeps the signal readable for a colourblind
+    /// player, and means the colours can be the conventional ones without the
+    /// app depending on them. Both are washes rather than solids so the
+    /// notation underneath stays legible.
+    static let sharpBarCSS = "rgba(214, 61, 45, 0.32)"
+    static let flatBarCSS = "rgba(26, 152, 84, 0.32)"
+
+    /// Which way the player is off the note the cursor sits on.
+    ///
+    /// Renderer-local rather than the view models' `PitchDirection`: the
+    /// notation layer shouldn't reach up into `ViewModels/` for a type, and
+    /// "in tune" isn't drawn — nothing needs marking when the note is right.
+    public enum CursorDeviation: Equatable, Sendable {
+        case sharp
+        case flat
+    }
+
     /// Dynamics are conventionally set in bold italic serif.
     static let dynamicsFont = FontInfo(family: "Times New Roman", size: 12, weight: "bold", style: "italic")
 
@@ -102,7 +124,9 @@ public enum ScoreRenderer {
         }
     }
 
-    public struct Metrics {
+    /// `Equatable` so a view can tell whether the engraving actually needs
+    /// redoing — see `ScoreRowCanvas`.
+    public struct Metrics: Equatable {
         /// Distance between staff lines. VexFlow's default is
         /// `Tables.STAVE_LINE_DISTANCE` (10); a little more reads better on a
         /// phone. Everything else scales off this, so raising it far above the
@@ -375,6 +399,9 @@ public enum ScoreRenderer {
         into context: RenderContext,
         availableWidth: Double,
         cursorPlayableIndex: Int? = nil,
+        /// Drawn as a bar above or below the cursor note. Nil when the note is
+        /// in tune, or when nothing is being graded.
+        cursorDeviation: CursorDeviation? = nil,
         sectionMeasures: ClosedRange<Int>? = nil,
         /// Printed as a tempo marking above the first row, as on a printed part.
         tempoBPM: Double? = nil,
@@ -560,6 +587,23 @@ public enum ScoreRenderer {
                 position.staffBottomY - position.staffTopY + padding * 2
             )
             _ = context.restore()
+
+            // Intonation bar, sitting in the space the stave already reserves
+            // above and below itself (see `staveExtentInSpaces`), so it can't
+            // be clipped by the row and never collides with the notation.
+            if let cursorDeviation {
+                let barHeight = metrics.staveSpace * 0.7
+                let gap = metrics.staveSpace * 0.35
+                let y: Double
+                switch cursorDeviation {
+                case .sharp: y = position.staffTopY - padding - gap - barHeight
+                case .flat: y = position.staffBottomY + padding + gap
+                }
+                _ = context.save()
+                _ = context.setFillStyle(cursorDeviation == .sharp ? sharpBarCSS : flatBarCSS)
+                _ = context.fillRect(position.x - cursorWidth / 2, y, cursorWidth, barHeight)
+                _ = context.restore()
+            }
         }
         if let sectionOpen {
             drawSectionBracket(context, x: sectionOpen.x, top: sectionOpen.top, bottom: sectionOpen.bottom, opening: true, metrics: metrics)

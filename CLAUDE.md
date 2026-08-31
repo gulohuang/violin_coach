@@ -111,7 +111,7 @@ numbering.
   rising noise: clean ~1.0, badly degraded ~0.34, white noise 0.05–0.07. A loud bow
   scratch passes any loudness test but scores badly on periodicity, which is
   the whole point. Practice defaults to `.highest`: it already knows which
-  note it wants, and the ±38 cent window plus three consecutive readings do
+  note it wants, and the chosen cents window plus the sustain requirement do
   the filtering.
 - **A violin timbre, synthesised from body resonances.** A bowed string moves
   in Helmholtz motion, whose spectrum is essentially a sawtooth — every
@@ -307,11 +307,33 @@ Simulator audio input is often silent by default — check
 - Comments explain *why*, not *what*. Existing comments document the reasoning
   behind non-obvious choices (why autocorrelation, why per-measure staves,
   why the tolerance values are what they are) — match that.
-- Practice-mode tolerances (`PracticeViewModel`): ±38 cents, and the note must
-  be *sustained* for `0.6 ×` its written duration, clamped to 0.18–1.2s. Pitch
-  alone let you skate through a slow passage at any speed; the clamp keeps
-  sixteenths responsive and stops a whole note becoming a stamina test.
-  Change these only with a reason.
+- Practice-mode tolerances (`PracticeViewModel`): the cents window is the
+  player's own choice (`MatchTolerance` — easy 50, medium 35, hard 20,
+  professional 10; 10 is inside an ordinary vibrato, which is the point), and
+  the note must be *sustained* for `0.6 ×` its written duration, clamped to
+  0.18–1.2s. Pitch alone let you skate through a slow passage at any speed;
+  the clamp keeps sixteenths responsive and stops a whole note becoming a
+  stamina test. Change these only with a reason.
+- **A gate after each note, so one bow can't count twice.** Once a note is
+  satisfied, input is ignored for half the length that note was written to
+  sound for (clamped 0.06–0.6s). Without it a sustained bow satisfies the next
+  note the instant the cursor reaches it — most visibly on a repeated pitch.
+  The gate opens on a clock, so it is checked by the 20Hz ticker rather than
+  on reading arrival: a player already holding the next note publishes nothing
+  new for the dedup to deliver, and the gate would never be noticed to have
+  opened.
+- **Intonation shows on the score, by position first.** A wash above the cursor
+  note means sharp, below means flat (`ScoreRenderer.CursorDeviation`). The
+  colours are the conventional ones but carry no information the position
+  doesn't, so the signal survives colourblindness — same rule as the tuner.
+  Nothing is drawn for an in-tune note: a marker that is always there stops
+  meaning anything.
+- **The score canvas is gated on `Equatable`.** `Canvas`'s render closure is
+  opaque to SwiftUI, so a canvas redraws whenever its parent's body re-runs —
+  and practice re-runs it 20 times a second to keep the hold meter smooth.
+  `ScoreRowCanvas` compares its inputs first, which is why `Score`,
+  `ScoreMeasure` and `Metrics` are `Equatable`. Without it every tick
+  re-engraves every visible system to produce an identical image.
 - **The hold clock runs on a timer, not on pitch readings.** `PitchDetector`
   suppresses readings identical to the last one, so a perfectly steady note
   stops publishing — checking the hold only when a reading arrives would mean

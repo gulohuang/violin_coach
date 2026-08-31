@@ -108,7 +108,7 @@ public struct ScoreNote: Identifiable, Equatable, Sendable {
     }
 }
 
-public struct ScoreMeasure: Identifiable, Sendable {
+public struct ScoreMeasure: Identifiable, Equatable, Sendable {
     public let id: Int
     public let number: Int
     public let notes: [ScoreNote]
@@ -124,7 +124,11 @@ public struct ScoreMeasure: Identifiable, Sendable {
 /// supports one staff/one voice (a solo violin line), which covers the vast
 /// majority of beginner/intermediate violin repertoire and keeps both the
 /// renderer and the practice/playback logic tractable to hand-verify.
-public struct Score: Sendable {
+/// `Equatable` so views can tell "same score" from "different score" cheaply.
+/// `ScoreCanvasView` leans on it to skip re-engraving a row when nothing that
+/// affects the drawing changed — practice ticks its hold meter at 20 Hz, and
+/// without that check every tick would redraw every visible system.
+public struct Score: Equatable, Sendable {
     public let title: String
     /// Circle-of-fifths key signature count from MusicXML (<key><fifths>). Positive = sharps, negative = flats.
     public let fifths: Int
