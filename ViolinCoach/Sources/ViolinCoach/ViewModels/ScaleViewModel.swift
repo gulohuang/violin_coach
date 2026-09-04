@@ -1,9 +1,12 @@
 import Combine
 import Foundation
 
-/// Tab 2: scales. Builds the chosen scale as a `Score` and plays it back with
-/// a following cursor, reusing `ScoreRenderer` and `ScoreAudioPlayer` rather
-/// than growing a second notation or audio path.
+/// Tab 2: scales. Holds which scale is selected and builds it as a `Score`.
+///
+/// Deliberately does *not* implement practice: the generated score is handed
+/// to a `PracticeViewModel`, so the hold clock, the gate between notes, the
+/// matching standard and the intonation bars are the same code the Practice
+/// tab runs. A second copy would drift on the first change to either.
 ///
 /// The selection is `private(set)` with explicit `select` methods rather than
 /// freely writable `@Published` properties. Two of the choices constrain each
@@ -15,16 +18,15 @@ import Foundation
 public final class ScaleViewModel: ObservableObject {
     @Published public private(set) var root = ScaleRoot("G")
     @Published public private(set) var type: ScaleType = .major
+    /// Two octaves by default: the standard scale a violinist runs daily, and
+    /// what "up to the octave above and back" means in practice.
     @Published public private(set) var octaves = 2
     @Published public private(set) var direction: ScaleDirection = .ascendingDescending
     @Published public private(set) var score: Score?
 
-    /// Playback tempo. Scales are practised slowly on purpose, so this starts
-    /// well below the score players' default.
-    @Published public var tempoBPM: Double = 80
-    @Published public var noteSize: ScoreRenderer.NoteSize = .mediumSmall
-    @Published public var autoScroll = true
-
+    /// Playback of the scale, for hearing the target before playing it. Kept
+    /// strictly exclusive with practice: the synth would otherwise sound into
+    /// the microphone the detector is listening to.
     public let player: ScoreAudioPlayer
     public var a4Reference: Double = 440
 
@@ -35,8 +37,8 @@ public final class ScaleViewModel: ObservableObject {
     public init(player: ScoreAudioPlayer = ScoreAudioPlayer()) {
         self.player = player
         // See TunerViewModel: a nested ObservableObject's changes don't reach
-        // the object holding it, so without this relay the cursor would never
-        // advance and the play button would never flip to stop.
+        // the object holding it, so without this relay the play button would
+        // never flip to stop.
         player.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
@@ -47,6 +49,13 @@ public final class ScaleViewModel: ObservableObject {
 
     public var availableRoots: [ScaleRoot] { ScaleGenerator.roots(for: type) }
     public var maximumOctaves: Int { ScaleGenerator.maximumOctaves(root: root) }
+
+    /// What the practice view model uses to tell one exercise from another, so
+    /// changing key starts a clean session and coming back to the same scale
+    /// keeps your place.
+    public var scoreIdentity: String {
+        "scale-\(root.id)-\(type.rawValue)-\(octaves)-\(direction.rawValue)"
+    }
 
     public func select(root: ScaleRoot) {
         guard root != self.root else { return }
@@ -99,12 +108,14 @@ public final class ScaleViewModel: ObservableObject {
         )
     }
 
-    // MARK: - Playback
+    // MARK: - Listening
 
     public var isPlaying: Bool { player.isPlaying }
     public var currentPlayableIndex: Int { player.currentIndex }
 
-    public func togglePlayback() {
+    /// Plays the scale so you can hear it. `tempoBPM` comes from the practice
+    /// view model's control, so the one speed setting governs both.
+    public func play(tempoBPM: Double) {
         guard let score else { return }
         if player.isPlaying {
             player.stop()
@@ -119,8 +130,8 @@ public final class ScaleViewModel: ObservableObject {
 
     // MARK: - Summary
 
-    /// "G3 – G5 · 29 notes", so the range is visible before you play it —
-    /// which is how you tell a two-octave scale you can reach from a
+    /// "G3 – G5 · 29 notes", so the range and length are visible before you
+    /// play — which is how you tell a two-octave scale you can reach from a
     /// three-octave one you can't.
     public var rangeSummary: String? {
         guard let score,

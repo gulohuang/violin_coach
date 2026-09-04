@@ -177,12 +177,20 @@ public enum ScaleGenerator {
             : "\(root.label) \(type.label) · \(octaveText)"
     }
 
+    /// Notes per bar: eighths in 4/4.
+    static let notesPerMeasure = 8
+    /// Eighths are beamed in fours, which is how a scale is printed — the beam
+    /// groups mark the half-bar and make a long run readable at a glance.
+    static let beamGroupSize = 4
+
     /// Builds the scale.
     ///
-    /// Written in plain quarter notes in 4/4. Scales are a rhythm exercise
-    /// only incidentally — what matters is the pitch sequence and being able
-    /// to slow it down, which the tempo control already does. Even notes also
-    /// mean no beaming to get wrong.
+    /// Written in eighth notes in 4/4, beamed in fours, the way scale books
+    /// print them. The tempo control is what makes them practisable slowly;
+    /// the note value only sets how they look on the page.
+    ///
+    /// The descent doesn't repeat the top note, so an *n*-note ascent is
+    /// followed by *n - 1* coming down: two octaves is 15 up and 14 back.
     public static func score(
         root: ScaleRoot,
         type: ScaleType,
@@ -205,6 +213,7 @@ public enum ScaleGenerator {
             spelled.append(contentsOf: down)
         }
 
+        let total = spelled.count
         let notes = spelled.enumerated().map { index, note in
             ScoreNote(
                 id: index,
@@ -213,10 +222,11 @@ public enum ScaleGenerator {
                 step: note.step,
                 alter: note.alter,
                 octave: note.octave,
-                beatsInQuarters: 1,
-                typeName: "quarter",
+                beatsInQuarters: 0.5,
+                typeName: "eighth",
                 dots: 0,
-                measureNumber: index / 4 + 1
+                measureNumber: index / notesPerMeasure + 1,
+                beam: beamRole(at: index, total: total)
             )
         }
 
@@ -228,6 +238,23 @@ public enum ScaleGenerator {
             tempoBPM: tempoBPM,
             notes: notes
         )
+    }
+
+    /// Where a note sits in its beam group.
+    ///
+    /// Groups never cross a barline — `ScoreRenderer` closes them per measure
+    /// anyway — and a group left alone by a short final bar gets no beam at
+    /// all, since a beam needs two notes to join.
+    static func beamRole(at index: Int, total: Int) -> BeamRole? {
+        let measure = index / notesPerMeasure
+        let positionInMeasure = index % notesPerMeasure
+        let group = positionInMeasure / beamGroupSize
+        let first = measure * notesPerMeasure + group * beamGroupSize
+        let last = min(first + beamGroupSize - 1, total - 1)
+        guard last > first else { return nil }
+        if index == first { return .begin }
+        if index == last { return .end }
+        return .continue
     }
 
     // MARK: - Spelling

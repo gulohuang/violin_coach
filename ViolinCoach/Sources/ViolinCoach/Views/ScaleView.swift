@@ -1,14 +1,15 @@
 import SwiftUI
 
-/// Tab 2: scales. Choose a key, mode, range and direction; the scale is
-/// engraved and can be played back with the cursor following, on the same
-/// violin tone the score player uses.
+/// Tab 2: scales. Choose a tonality and key; the scale is engraved and then
+/// practised note by note with live pitch feedback.
 ///
-/// Everything below the picker row is the score player's machinery reused
-/// verbatim — the scale is just a `Score` that happens to be generated rather
-/// than parsed, which is the whole reason `ScaleGenerator` produces one.
+/// Below the picker row this *is* the Practice tab — same `PracticeSessionView`,
+/// same `PracticeViewModel` — so the hold clock, the gate between notes, the
+/// matching standard, and the intonation bars above and below the cursor note
+/// behave identically. The only difference is where the score came from.
 struct ScaleView: View {
     @StateObject private var viewModel = ScaleViewModel()
+    @StateObject private var practice = PracticeViewModel()
 
     var body: some View {
         NavigationStack {
@@ -17,59 +18,45 @@ struct ScaleView: View {
                 .background(Theme.Palette.background.ignoresSafeArea())
                 .navigationTitle("Scales")
         }
-        .onDisappear { viewModel.stop() }
+        .onDisappear {
+            practice.stop()
+            viewModel.stop()
+        }
     }
 
     private var content: some View {
-        VStack(spacing: Theme.Spacing.lg) {
-            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                pickers
+        VStack(spacing: 0) {
+            pickers
+                .padding(.horizontal, Theme.Spacing.lg)
+                .padding(.top, Theme.Spacing.md)
 
-                if let score = viewModel.score {
-                    ScoreCanvasView(
-                        score: score,
-                        currentPlayableIndex: viewModel.currentPlayableIndex,
-                        noteSize: viewModel.noteSize,
-                        autoScroll: viewModel.autoScroll,
-                        tempoBPM: viewModel.tempoBPM
-                    )
-                    .frame(maxHeight: .infinity)
-
-                    ScoreControlsBar(
-                        tempoBPM: $viewModel.tempoBPM,
-                        noteSize: $viewModel.noteSize,
-                        autoScroll: $viewModel.autoScroll,
-                        defaultTempoBPM: ScaleViewModel.defaultTempoBPM
-                    )
-
-                    ScoreProgressBar(
-                        current: viewModel.currentPlayableIndex,
-                        total: score.playableNotes.count
-                    )
-                } else {
-                    Spacer()
-                }
+            if let score = viewModel.score {
+                PracticeSessionView(viewModel: practice, score: score)
+            } else {
+                Spacer()
             }
-
-            Button {
-                viewModel.togglePlayback()
-            } label: {
-                Image(systemName: viewModel.isPlaying ? "stop.fill" : "play.fill")
-                    .accessibilityLabel(viewModel.isPlaying ? "Stop" : "Play")
-            }
-            .buttonStyle(CircularTransportButtonStyle(
-                tint: viewModel.isPlaying ? Theme.Palette.stop : Theme.Palette.accent
-            ))
-            .padding(.bottom, Theme.Spacing.lg)
         }
-        .padding(.horizontal, Theme.Spacing.lg)
-        .padding(.top, Theme.Spacing.md)
+        // Loading is keyed on the scale's identity, so changing key starts a
+        // clean session and coming back to the same one keeps your place.
+        .onAppear { loadCurrentScale() }
+        .onChange(of: viewModel.scoreIdentity) { _ in loadCurrentScale() }
+        // The synth and the microphone must never run together: playback would
+        // sound straight into the detector and be graded as the player.
+        .onChange(of: practice.isActive) { active in
+            if active { viewModel.stop() }
+        }
     }
 
-    /// Four menus on one wrapping row. Menus rather than segmented controls
-    /// because twelve keys and five modes don't fit across a phone, and these
-    /// are chosen once at the start of a practice session rather than adjusted
-    /// while playing.
+    private func loadCurrentScale() {
+        guard let score = viewModel.score else { return }
+        practice.load(score: score, identity: viewModel.scoreIdentity)
+    }
+
+    /// Tonality, key, range and direction, plus a listen button.
+    ///
+    /// Menus rather than segmented controls: twelve keys and five tonalities
+    /// don't fit across a phone, and these are chosen once at the start of a
+    /// practice session rather than adjusted while playing.
     private var pickers: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
             HStack(spacing: Theme.Spacing.sm) {
@@ -90,6 +77,22 @@ struct ScaleView: View {
                 }
 
                 Spacer(minLength: 0)
+
+                // Hearing the scale before playing it is the point of this
+                // button, so it's beside the choice rather than down with the
+                // practice transport.
+                Button {
+                    practice.stop()
+                    viewModel.play(tempoBPM: practice.tempoBPM)
+                } label: {
+                    Image(systemName: viewModel.isPlaying ? "stop.fill" : "speaker.wave.2.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(width: 34, height: 34)
+                        .background(Circle().fill(Theme.Palette.cardSurface))
+                        .foregroundStyle(viewModel.isPlaying ? Theme.Palette.stop : Theme.Palette.accent)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(viewModel.isPlaying ? "Stop listening" : "Listen to the scale")
             }
 
             HStack(spacing: Theme.Spacing.sm) {
@@ -114,13 +117,15 @@ struct ScaleView: View {
                     chip(viewModel.direction.label, icon: "arrow.turn.up.right")
                 }
 
-                Spacer(minLength: 0)
-            }
+                if let summary = viewModel.rangeSummary {
+                    Text(summary)
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
 
-            if let summary = viewModel.rangeSummary {
-                Text(summary)
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
             }
         }
     }

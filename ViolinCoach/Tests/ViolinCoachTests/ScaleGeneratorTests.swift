@@ -168,13 +168,87 @@ final class ScaleGeneratorTests: XCTestCase {
         }
     }
 
-    func testBarsHoldFourQuarterNotes() {
+    // MARK: - Rhythm and beaming
+
+    func testScalesAreWrittenInEighthNotes() {
         let score = ScaleGenerator.score(root: ScaleRoot("D"), type: .major, octaves: 1, direction: .ascending)
         XCTAssertEqual(score.beatsPerMeasure, 4)
         XCTAssertEqual(score.beatType, 4)
-        XCTAssertTrue(score.playableNotes.allSatisfy { $0.beatsInQuarters == 1 })
-        // 8 notes -> two full bars.
-        XCTAssertEqual(score.measures.count, 2)
-        XCTAssertEqual(score.measures.first?.notes.count, 4)
+        XCTAssertTrue(score.playableNotes.allSatisfy { $0.beatsInQuarters == 0.5 })
+        XCTAssertTrue(score.playableNotes.allSatisfy { $0.typeName == "eighth" })
+        // One octave up is 8 notes — exactly one bar of eighths.
+        XCTAssertEqual(score.measures.count, 1)
+        XCTAssertEqual(score.measures.first?.notes.count, 8)
+    }
+
+    /// Eighths are beamed in fours, which is how a scale is printed. A group
+    /// must open, run and close, or `ScoreRenderer` will drop it.
+    func testEighthsAreBeamedInFours() {
+        let score = ScaleGenerator.score(root: ScaleRoot("G"), type: .major, octaves: 1, direction: .ascending)
+        let beams = score.playableNotes.map(\.beam)
+        XCTAssertEqual(beams, [.begin, .continue, .continue, .end,
+                               .begin, .continue, .continue, .end])
+    }
+
+    /// A group left with one note by a short final bar can't be beamed — a
+    /// beam needs two notes to join.
+    func testALoneFinalNoteIsNotBeamed() {
+        // 15 notes: three full groups of four, then a group of three, then one
+        // note alone at the head of the next group.
+        XCTAssertNil(ScaleGenerator.beamRole(at: 12, total: 13))
+        XCTAssertEqual(ScaleGenerator.beamRole(at: 8, total: 15), .begin)
+        XCTAssertEqual(ScaleGenerator.beamRole(at: 11, total: 15), .end)
+        // The last group of a 15-note run holds notes 12, 13, 14.
+        XCTAssertEqual(ScaleGenerator.beamRole(at: 12, total: 15), .begin)
+        XCTAssertEqual(ScaleGenerator.beamRole(at: 14, total: 15), .end)
+    }
+
+    /// Beam groups never cross a barline — `ScoreRenderer` closes them per
+    /// measure, so one that did would simply be dropped.
+    func testBeamGroupsStayInsideOneBar() {
+        let score = ScaleGenerator.score(
+            root: ScaleRoot("G"), type: .major,
+            octaves: 2, direction: .ascendingDescending
+        )
+        for measure in score.measures {
+            var open = false
+            for note in measure.notes {
+                switch note.beam {
+                case .begin:
+                    XCTAssertFalse(open, "a beam opened while one was already open")
+                    open = true
+                case .continue:
+                    XCTAssertTrue(open, "a beam continued without opening")
+                case .end:
+                    XCTAssertTrue(open, "a beam closed without opening")
+                    open = false
+                case nil:
+                    XCTAssertFalse(open, "an unbeamed note inside an open beam")
+                }
+            }
+            XCTAssertFalse(open, "bar \(measure.number) ends with an unclosed beam")
+        }
+    }
+
+    /// The shape the Scale tab is built around: two octaves up and back, with
+    /// the top note sounding once. An n-note ascent is followed by n-1 down.
+    func testTwoOctavesUpAndBack() {
+        let score = ScaleGenerator.score(
+            root: ScaleRoot("C"), type: .major,
+            octaves: 2, direction: .ascendingDescending
+        )
+        let midis = score.playableNotes.map(\.midi)
+        XCTAssertEqual(midis.count, 29) // 15 up, 14 back
+
+        let start = ScaleGenerator.startingMIDI(root: ScaleRoot("C"))
+        XCTAssertEqual(midis.first, start)
+        XCTAssertEqual(midis.last, start)
+        XCTAssertEqual(midis.max(), start + 24)
+        // The top sounds once, not twice.
+        XCTAssertEqual(midis.filter { $0 == start + 24 }.count, 1)
+        // Strictly up to the peak, then strictly down.
+        let peak = midis.firstIndex(of: start + 24)!
+        XCTAssertEqual(Array(midis[...peak]), Array(midis[...peak]).sorted())
+        XCTAssertEqual(Array(midis[peak...]), Array(midis[peak...]).sorted(by: >))
     }
 }

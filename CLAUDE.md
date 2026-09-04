@@ -63,9 +63,16 @@ Layering, strictly one-directional (`Views → ViewModels → Services → Model
 | Tab | View | ViewModel | Engine |
 |---|---|---|---|
 | Tuner | `TunerView` | `TunerViewModel` | `PitchDetector` → `PitchMath` |
-| Scale | `ScaleView` | `ScaleViewModel` | `ScaleGenerator` → `ScoreAudioPlayer` |
+| Scale | `ScaleView` | `ScaleViewModel` + `PracticeViewModel` | `ScaleGenerator` → `PitchDetector` |
 | Score Player | `ScorePlayerView` | `ScorePlayerViewModel` | `ScoreAudioPlayer` → `ToneSynthesizer` |
 | Practice | `PracticeView` | `PracticeViewModel` | `PitchDetector` + `ScoreRenderer` |
+
+The Scale and Practice tabs share one practice screen. `PracticeSessionView`
+holds the score canvas, the controls, the feedback card and the transport;
+`PracticeViewModel` holds the hold clock, the gate between notes and the
+matching standard. The Scale tab feeds it a generated score instead of a
+parsed one (`load(score:identity:)`), so there is exactly one implementation
+of the pitch feedback and both tabs get every change to it.
 
 Both score tabs open on a **folder** (`ScoreLibraryView` + `ScoreLibraryViewModel`)
 listing every saved score; picking one pushes that tab's screen inside a
@@ -142,7 +149,10 @@ numbering.
   steps flatward, which is what makes the harmonic and melodic forms print
   their raised degrees as accidentals rather than swallowing them. The octave
   count is computed per key, not fixed at three: the top of the violin is a
-  fixed pitch, so three octaves of G fits and three of F♯ does not.
+  fixed pitch, so three octaves of G fits and three of F♯ does not. Written in
+  eighth notes beamed in fours, as scale books print them; the descent doesn't
+  repeat the top note, so an *n*-note ascent is followed by *n − 1* coming
+  back (two octaves is 15 up, 14 down).
 - **Hand-rolled MusicXML parser** (`Foundation.XMLParser`, SAX-style). Keeps
   VexFoundation as the only third-party dependency. MusicXML is just XML;
   staff engraving is the genuinely hard part worth a dependency.
@@ -200,7 +210,8 @@ violin_coach/
 │   │   ├── ViewModels/          # Tuner, Scale, ScorePlayer, Practice,
 │   │   │                        # ScoreLibrary
 │   │   ├── Views/               # ContentView (TabView) + 4 tabs +
-│   │   │                        # ScoreLibraryView (the folder) + ScoreCanvasView
+│   │   │                        # PracticeSessionView (shared by Scale and
+│   │   │                        # Practice), ScoreLibraryView, ScoreCanvasView
 │   │   └── Resources/gavotte.musicxml
 │   └── Tests/ViolinCoachTests/  # XCTest — NEVER RUN, see above
 └── app/                         # web prototype (VERIFIED: builds, 12 tests pass)

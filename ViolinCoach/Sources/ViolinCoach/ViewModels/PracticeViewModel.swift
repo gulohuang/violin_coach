@@ -160,23 +160,39 @@ public final class PracticeViewModel: ObservableObject {
 
     public func load(_ entry: ScoreEntry) {
         guard loadedEntryID != entry.id else { return }
+        switch ScoreLibrary.load(entry) {
+        case .success(let score):
+            load(score: score, identity: entry.id)
+            // A file brings its own marking; a generated scale doesn't, which
+            // is why only this path sets the tempo.
+            tempoBPM = score.tempoBPM
+        case .failure(let error):
+            stop()
+            loadedEntryID = entry.id
+            self.score = nil
+            loadError = error.localizedDescription
+        }
+    }
+
+    /// Practises a score that didn't come from a file — a generated scale.
+    ///
+    /// `identity` is whatever the caller uses to mean "the same exercise", so
+    /// re-entering the screen keeps your place and changing the exercise
+    /// starts clean. Deliberately leaves `tempoBPM` alone: a generated score
+    /// has no marking of its own worth adopting, and a player who slowed the
+    /// tempo down shouldn't have it snap back every time they change key.
+    public func load(score: Score, identity: String) {
+        guard loadedEntryID != identity else { return }
         stop()
-        loadedEntryID = entry.id
+        loadedEntryID = identity
         // A section, a cursor position and a loop count all belong to the
         // piece they were chosen in; carrying them into a different score
         // would point them at bars that mean something else.
         clearSection()
         currentIndex = -1
         isComplete = false
-        switch ScoreLibrary.load(entry) {
-        case .success(let score):
-            self.score = score
-            self.tempoBPM = score.tempoBPM
-            loadError = nil
-        case .failure(let error):
-            self.score = nil
-            loadError = error.localizedDescription
-        }
+        self.score = score
+        loadError = nil
     }
 
     // MARK: - Section selection
