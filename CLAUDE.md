@@ -375,6 +375,18 @@ Simulator audio input is often silent by default — check
   doesn't, so the signal survives colourblindness — same rule as the tuner.
   Nothing is drawn for an in-tune note: a marker that is always there stops
   meaning anything.
+- **Cursor state reaches only the row that draws it.** `cursorPlayableIndex`,
+  `cursorDeviation` and the tempo marking used to be passed to every row, so a
+  cursor move or a wobble in intonation made *all* visible rows compare
+  unequal and re-engrave — staves, notes, beams, formatter — to produce an
+  identical image everywhere but one. `ScoreCanvasView` works out the cursor's
+  row once and hands those values only to it (and the tempo only to row 0), so
+  a note advance repaints two rows at a line break and one everywhere else.
+- **No `AnyView` in the practice screen.** `AnyView` erases the type, so
+  SwiftUI cannot compare one build of a subtree with the next and must
+  re-render it. `PracticeSessionView` is generic over its extra controls
+  instead, which is what lets the Fine Tune tab's twelve sliders be skipped
+  when only the cursor moved.
 - **The score canvas is gated on `Equatable`.** `Canvas`'s render closure is
   opaque to SwiftUI, so a canvas redraws whenever its parent's body re-runs —
   and practice re-runs it 20 times a second to keep the hold meter smooth.

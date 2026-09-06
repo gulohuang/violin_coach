@@ -66,19 +66,38 @@ struct ScoreCanvasView: View {
         GeometryReader { geo in
             let width = geo.size.width
             let rowCount = ScoreRenderer.rowCount(for: score, availableWidth: width, metrics: metrics)
+            // Which row the cursor is on, worked out once rather than per row.
+            // Cheap: `plan` walks the measure list and does no engraving.
+            let cursorRow = currentPlayableIndex >= 0
+                ? ScoreRenderer.rowIndex(
+                    forPlayableIndex: currentPlayableIndex,
+                    score: score,
+                    availableWidth: width,
+                    metrics: metrics
+                  )
+                : nil
 
             ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(spacing: metrics.rowGap) {
                     ForEach(0..<max(1, rowCount), id: \.self) { rowIndex in
+                        // Cursor state reaches only the row that draws it, and
+                        // the tempo marking only row 0. Passing them to every
+                        // row made all of them compare unequal on a cursor move
+                        // or a wobble in intonation, so every visible system
+                        // re-engraved — staves, notes, beams, the formatter —
+                        // to produce an identical image everywhere but one.
+                        // Now a note advance repaints two rows at a line break
+                        // and one everywhere else.
+                        let isCursorRow = rowIndex == cursorRow
                         ScoreRowCanvas(
                             score: score,
                             rowIndex: rowIndex,
                             width: width,
-                            currentPlayableIndex: currentPlayableIndex,
-                            cursorDeviation: cursorDeviation,
+                            currentPlayableIndex: isCursorRow ? currentPlayableIndex : -1,
+                            cursorDeviation: isCursorRow ? cursorDeviation : nil,
                             sectionMeasures: sectionMeasures,
-                            tempoBPM: tempoBPM,
+                            tempoBPM: rowIndex == 0 ? tempoBPM : nil,
                             metrics: metrics
                         )
                         .equatable()

@@ -12,26 +12,41 @@ import SwiftUI
 /// It takes the score explicitly rather than reading `viewModel.score` so the
 /// host decides what "loaded" means: the Practice tab gates on the file it
 /// pushed, the Scale tab on the scale currently selected.
-struct PracticeSessionView: View {
+struct PracticeSessionView<ExtraControls: View>: View {
     @ObservedObject var viewModel: PracticeViewModel
     let score: Score
-    /// Extra controls the host tab wants folded into the hideable stack — the
-    /// Fine Tune tab's parameter panel. `AnyView` rather than a generic so the
-    /// common call site stays `PracticeSessionView(viewModel:score:)`; this is
-    /// a controls bar, not a hot path.
-    var extraControls: AnyView?
     /// Whether starting practice clears the controls off screen.
     ///
     /// True for Practice and Scale, where you want the whole screen for the
     /// music. False for Fine Tune, where the controls *are* the reason you're
     /// there — a tuning screen that hides its sliders the moment you start the
     /// thing being tuned is no use.
-    var hidesControlsWhilePracticing = true
+    let hidesControlsWhilePracticing: Bool
+    /// Extra controls the host tab folds into the hideable stack — the Fine
+    /// Tune tab's parameter panel.
+    ///
+    /// Generic rather than `AnyView`. `AnyView` erases the type, so SwiftUI
+    /// cannot tell one build of the panel from the next and has to re-render
+    /// all twelve sliders whenever this view's body runs. With the concrete
+    /// type it compares the panel's inputs, sees the same store, and skips it.
+    let extraControls: () -> ExtraControls
 
     /// Controls hide once practice starts, so the score gets the whole screen
     /// — you're reading music at that point, not adjusting settings. Tapping
     /// the score brings them back.
     @State private var showsControls = true
+
+    init(
+        viewModel: PracticeViewModel,
+        score: Score,
+        hidesControlsWhilePracticing: Bool = true,
+        @ViewBuilder extraControls: @escaping () -> ExtraControls
+    ) {
+        self.viewModel = viewModel
+        self.score = score
+        self.hidesControlsWhilePracticing = hidesControlsWhilePracticing
+        self.extraControls = extraControls
+    }
 
     var body: some View {
         VStack(spacing: Theme.Spacing.lg) {
@@ -70,7 +85,7 @@ struct PracticeSessionView: View {
                         defaultTempoBPM: score.tempoBPM
                     )
                     practiceBar
-                    extraControls
+                    extraControls()
                     ScoreProgressBar(
                         current: viewModel.currentIndex,
                         total: score.playableNotes.count
@@ -247,6 +262,21 @@ struct PracticeSessionView: View {
     private var sectionButtonIcon: String {
         if viewModel.isSelectingSection { return "xmark" }
         return viewModel.sectionMeasures == nil ? "square.dashed" : "arrow.counterclockwise"
+    }
+}
+
+/// The two tabs with nothing extra to add keep the plain call site.
+extension PracticeSessionView where ExtraControls == EmptyView {
+    init(
+        viewModel: PracticeViewModel,
+        score: Score,
+        hidesControlsWhilePracticing: Bool = true
+    ) {
+        self.init(
+            viewModel: viewModel,
+            score: score,
+            hidesControlsWhilePracticing: hidesControlsWhilePracticing
+        ) { EmptyView() }
     }
 }
 

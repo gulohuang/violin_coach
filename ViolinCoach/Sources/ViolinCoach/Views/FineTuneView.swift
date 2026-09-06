@@ -36,12 +36,13 @@ struct FineTuneView: View {
                 PracticeSessionView(
                     viewModel: viewModel,
                     score: score,
-                    extraControls: AnyView(TuningPanel(tuning: tuning)),
                     // The sliders have to stay put while you play — moving one
                     // and hearing the difference immediately is the whole
                     // method here.
                     hidesControlsWhilePracticing: false
-                )
+                ) {
+                    TuningPanel(tuning: tuning)
+                }
             } else if let error = viewModel.loadError, viewModel.isLoaded(entry) {
                 ScoreUnavailableView(title: "Couldn't load score", message: error)
             } else {
