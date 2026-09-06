@@ -148,6 +148,9 @@ public final class PitchDetector: ObservableObject {
     /// papering-over.
     private final class AnalysisGate: @unchecked Sendable {
         var isBusy = false
+        /// So the buffer-size report below is printed once per run rather than
+        /// a dozen times a second.
+        var hasReportedBufferSize = false
         /// Mirrors `sensitivity.minimumRMS`. Kept here so a change takes
         /// effect on the next buffer without tearing down and restarting the
         /// engine — the tap closure captures the gate, not the value.
@@ -203,6 +206,20 @@ public final class PitchDetector: ObservableObject {
                 // non-Sendable class across a concurrency boundary.
                 let sampleRate = format.sampleRate
 
+                #if DEBUG
+                // What the *hardware* granted, which is the floor on how small
+                // a tap buffer can be. `setPreferredIOBufferDuration` is a
+                // request that iOS silently clamps, so the only honest source
+                // for the real limits on a given device is reading them back.
+                let session = AVAudioSession.sharedInstance()
+                print("""
+                PitchDetector: sampleRate \(sampleRate) Hz, \
+                ioBufferDuration \(String(format: "%.2f", session.ioBufferDuration * 1000)) ms \
+                (\(Int((session.ioBufferDuration * sampleRate).rounded())) frames), \
+                requested tap \(bufferSize) frames
+                """)
+                #endif
+
                 input.removeTap(onBus: 0)
                 input.installTap(onBus: 0, bufferSize: bufferSize, format: format) { [weak self] buffer, _ in
                     guard let self, let channelData = buffer.floatChannelData else { return }
@@ -211,10 +228,29 @@ public final class PitchDetector: ObservableObject {
                     let frameCount = min(Int(buffer.frameLength), window)
                     let samples = Array(UnsafeBufferPointer(start: channelData[0], count: frameCount))
 
+                    // What the tap *actually* delivers, which is not
+                    // necessarily what was asked for: `bufferSize` is a hint,
+                    // and the implementation is free to pick another size —
+                    // it can never go below the hardware I/O buffer above.
+                    // This is the number that sets the detection rate.
+                    let deliveredFrames = Int(buffer.frameLength)
+
                     analysisQueue.async {
                         guard !gate.isBusy else { return } // drop, don't queue
                         gate.isBusy = true
                         defer { gate.isBusy = false }
+
+                        #if DEBUG
+                        if !gate.hasReportedBufferSize {
+                            gate.hasReportedBufferSize = true
+                            let period = Double(deliveredFrames) / sampleRate
+                            print("""
+                            PitchDetector: tap delivers \(deliveredFrames) frames \
+                            (\(String(format: "%.1f", period * 1000)) ms) -> \
+                            \(String(format: "%.1f", 1 / period)) analyses/sec
+                            """)
+                        }
+                        #endif
 
                         // The level meter reads the raw input, so it's
                         // computed regardless of whether the gate lets the
