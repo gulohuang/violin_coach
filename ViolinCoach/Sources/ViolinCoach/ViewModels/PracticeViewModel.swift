@@ -89,38 +89,29 @@ public final class PracticeViewModel: ObservableObject {
     /// How strict the pitch match is. The player's choice, so a beginner can
     /// get through a piece and an advanced player can be held to intonation
     /// that would actually pass in a lesson.
-    @Published public var matchTolerance: MatchTolerance = .medium
+    /// The last preset picked, for the menu's own state. Write it through
+    /// `select(matchTolerance:)` so the cents window follows.
+    @Published public private(set) var matchTolerance: MatchTolerance = .medium
 
     public let detector: PitchDetector
 
+    /// Every timing and tolerance constant now lives in `TuningParameters`,
+    /// so the Fine Tune tab can move them against a real violin. The defaults
+    /// are unchanged — see `TuningParameters.default` for what each one is and
+    /// why it has the value it has.
+    private let tuning: TuningStore
+
     /// How far off pitch still counts, in cents either side of the written note.
-    private var centsTolerance: Double { matchTolerance.cents }
+    private var centsTolerance: Double { tuning.parameters.centsTolerance }
 
-    /// Fraction of a note's written duration you must sustain it for.
-    /// Demanding the full value would punish the normal gap between bows;
-    /// demanding a fixed short time (the old behavior) ignored duration
-    /// altogether.
-    private let holdFraction = 0.6
-    /// Floor and ceiling on that. The floor keeps fast notes responsive; the
-    /// ceiling stops a whole note at a slow tempo from becoming a stamina test.
-    private let minimumHold: TimeInterval = 0.18
-    private let maximumHold: TimeInterval = 1.2
-    /// A single dropped reading mid-note shouldn't restart the clock — real
-    /// detection flickers, especially across a bow change.
-    private let holdGrace: TimeInterval = 0.15
+    private var holdFraction: Double { tuning.parameters.holdFraction }
+    private var minimumHold: TimeInterval { tuning.parameters.minimumHold }
+    private var maximumHold: TimeInterval { tuning.parameters.maximumHold }
+    private var holdGrace: TimeInterval { tuning.parameters.holdGrace }
 
-    /// After a note is satisfied, input is ignored for half the length that
-    /// note was written to sound for.
-    ///
-    /// Without it a single sustained bow can satisfy two notes in a row — most
-    /// obviously on a repeated pitch, where the sound that completed one note
-    /// is still going and immediately completes the next. The gate makes the
-    /// player re-articulate. Half the written value is the request; the clamp
-    /// is so a whole note doesn't lock the screen for two seconds and a
-    /// sixteenth isn't gated by a time too short to matter.
-    private let refractoryFraction = 0.5
-    private let minimumRefractory: TimeInterval = 0.06
-    private let maximumRefractory: TimeInterval = 0.6
+    private var refractoryFraction: Double { tuning.parameters.refractoryFraction }
+    private var minimumRefractory: TimeInterval { tuning.parameters.minimumRefractory }
+    private var maximumRefractory: TimeInterval { tuning.parameters.maximumRefractory }
     /// When the gate opens. Nil means input is being accepted.
     private var acceptInputAfter: Date?
 
@@ -130,6 +121,8 @@ public final class PracticeViewModel: ObservableObject {
     /// evaluating between readings — see `tickCancellable`.
     private var latestFrequency: Double?
     private var cancellable: AnyCancellable?
+    private var tuningCancellable: AnyCancellable?
+    private var tuningApplyCancellable: AnyCancellable?
     /// Drives the hold clock independently of reading arrival.
     ///
     /// The hold cannot be checked only when a new pitch arrives: the detector
@@ -142,17 +135,72 @@ public final class PracticeViewModel: ObservableObject {
     /// keeps your place in it and switching pieces starts clean.
     private var loadedEntryID: String?
 
-    public init(detector: PitchDetector = PitchDetector()) {
+    public init(
+        detector: PitchDetector = PitchDetector(),
+        tuning: TuningStore = .shared
+    ) {
         self.detector = detector
+        self.tuning = tuning
         // Practice leans permissive on purpose. Here the app already knows
         // which note it's waiting for, and the cents window plus the
         // sustain requirement filter out spurious detections anyway — so the
         // cost of a marginal reading is low, while missing a real note the
         // player did sound is the failure that actually feels broken.
         detector.sensitivity = .highest
+        // Then override with whatever the Fine Tune tab has dialled in. The
+        // preset above is what supplies the defaults, so the two never
+        // disagree unless the player has deliberately changed something.
+        detector.tapBufferFrames = tuning.parameters.tapBufferFrames
+        detector.analysisWindow = tuning.parameters.analysisWindow
+        detector.setDetectionFloors(
+            minimumClarity: tuning.parameters.minimumClarity,
+            minimumRMS: tuning.parameters.minimumRMS
+        )
         cancellable = detector.$frequency.sink { [weak self] frequency in
             self?.handle(frequency: frequency)
         }
+        // Two subscriptions, because the two halves want opposite timing.
+        //
+        // Re-rendering is immediate: the cents readout and the hold length are
+        // read straight off these values, and a slider whose label lags behind
+        // the thumb is unusable.
+        tuningCancellable = tuning.$parameters
+            .dropFirst()
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+
+        // Applying is debounced, because the buffer size can only change by
+        // reinstalling the tap — and dragging that slider would otherwise tear
+        // down and restart CoreAudio on every step of the drag.
+        tuningApplyCancellable = tuning.$parameters
+            .dropFirst()
+            .removeDuplicates()
+            .debounce(for: .milliseconds(350), scheduler: DispatchQueue.main)
+            .sink { [weak self] parameters in
+                guard let self else { return }
+                Task { await self.detector.applyTuning(parameters) }
+            }
+    }
+
+    /// Presets write into the shared cents value, so the menu and the Fine
+    /// Tune slider are two controls over one number rather than two numbers
+    /// that can disagree.
+    /// The cents window actually in force — the preset's value, or whatever
+    /// the Fine Tune slider has moved it to.
+    public var currentCentsTolerance: Double { tuning.parameters.centsTolerance }
+
+    /// The preset name when the window still matches one, "Custom" once it has
+    /// been dialled away from all of them.
+    public var matchToleranceLabel: String {
+        let cents = currentCentsTolerance
+        guard let preset = MatchTolerance.allCases.first(where: { $0.cents == cents }) else {
+            return "Custom"
+        }
+        return preset.label
+    }
+
+    public func select(matchTolerance: MatchTolerance) {
+        self.matchTolerance = matchTolerance
+        tuning.parameters.centsTolerance = matchTolerance.cents
     }
 
     /// Whether `score` is this entry's — see `ScorePlayerViewModel.isLoaded`.

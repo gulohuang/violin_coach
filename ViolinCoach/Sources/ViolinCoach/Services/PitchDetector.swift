@@ -91,6 +91,35 @@ public final class PitchDetector: ObservableObject {
     /// Distinct from `level`: a loud bow scratch is high level, low clarity.
     @Published public private(set) var clarity: Double = 0
 
+    /// Sets the detection floors directly, bypassing the `Sensitivity`
+    /// presets. The gate is read on the analysis queue and written on it, so
+    /// a change lands on the next buffer without restarting the engine.
+    public func setDetectionFloors(minimumClarity: Double, minimumRMS: Double) {
+        objectWillChange.send()
+        analysisQueue.async { [gate] in
+            gate.minimumClarity = minimumClarity
+            gate.minimumRMS = minimumRMS
+        }
+    }
+
+    /// Applies the tunable parameters. Buffer and window are only read when
+    /// the tap is installed, so changing either restarts the engine — which
+    /// is why it's `async` and why the caller gets told nothing happened if
+    /// the detector wasn't running.
+    public func applyTuning(_ parameters: TuningParameters) async {
+        let needsRestart = tapBufferFrames != parameters.tapBufferFrames
+            || analysisWindow != parameters.analysisWindow
+        tapBufferFrames = parameters.tapBufferFrames
+        analysisWindow = parameters.analysisWindow
+        setDetectionFloors(
+            minimumClarity: parameters.minimumClarity,
+            minimumRMS: parameters.minimumRMS
+        )
+        guard needsRestart, isListening else { return }
+        stop()
+        await start()
+    }
+
     public var sensitivity: Sensitivity = .medium {
         didSet {
             guard sensitivity != oldValue else { return }
@@ -120,7 +149,11 @@ public final class PitchDetector: ObservableObject {
 
     private nonisolated let engineBox = EngineBox()
     private nonisolated let audioQueue = DispatchQueue(label: "com.violincoach.audio-engine")
-    private let bufferSize: AVAudioFrameCount = 4096
+
+    /// Frames per tap callback — the hop between analyses, so this is what
+    /// sets the detection rate. Read at `start()`, because changing it means
+    /// reinstalling the tap; `applyTuning` restarts for you.
+    public var tapBufferFrames: Int = TuningParameters.default.tapBufferFrames
 
     /// Pitch detection is far too expensive to run on the main thread: YIN's
     /// difference function costs hundreds of thousands of operations per
@@ -134,8 +167,9 @@ public final class PitchDetector: ObservableObject {
     private nonisolated let analysisQueue = DispatchQueue(label: "com.violincoach.pitch-analysis", qos: .userInitiated)
 
     /// Samples analyzed per buffer. More than this buys no accuracy in the
-    /// violin's range, and YIN needs room for its longest lag on top.
-    private let analysisWindow = 2048
+    /// violin's range, and YIN needs room for its longest lag on top. Also
+    /// read at `start()`.
+    public var analysisWindow: Int = TuningParameters.default.analysisWindow
 
     /// Drop-if-busy flag. Buffers arriving while an analysis is in flight are
     /// dropped rather than queued: a tuner wants the *latest* reading, and an
@@ -176,7 +210,7 @@ public final class PitchDetector: ObservableObject {
         runToken += 1
         let token = runToken
         let window = analysisWindow
-        let bufferSize = self.bufferSize
+        let bufferSize = AVAudioFrameCount(max(64, tapBufferFrames))
 
         // Everything that can block goes to the audio queue; the main actor
         // only waits on the continuation, which doesn't hold up the run loop.

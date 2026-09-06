@@ -58,7 +58,7 @@ Layering, strictly one-directional (`Views → ViewModels → Services → Model
   no view touches a Service directly except through its ViewModel.
 - **Views** (`Sources/ViolinCoach/Views/`) — SwiftUI, as dumb as practical.
 
-### The four tabs
+### The five tabs
 
 | Tab | View | ViewModel | Engine |
 |---|---|---|---|
@@ -66,6 +66,7 @@ Layering, strictly one-directional (`Views → ViewModels → Services → Model
 | Scale | `ScaleView` | `ScaleViewModel` + `PracticeViewModel` | `ScaleGenerator` → `PitchDetector` |
 | Score Player | `ScorePlayerView` | `ScorePlayerViewModel` | `ScoreAudioPlayer` → `ToneSynthesizer` |
 | Practice | `PracticeView` | `PracticeViewModel` | `PitchDetector` + `ScoreRenderer` |
+| Fine Tune | `FineTuneView` | `PracticeViewModel` + `TuningStore` | same as Practice |
 
 The Scale and Practice tabs share one practice screen. `PracticeSessionView`
 holds the score canvas, the controls, the feedback card and the transport;
@@ -202,14 +203,14 @@ violin_coach/
 │   ├── project.yml              # XcodeGen spec → generates ViolinCoach.xcodeproj
 │   ├── Sources/ViolinCoach/
 │   │   ├── ViolinCoachApp.swift # @main
-│   │   ├── Models/Score.swift
+│   │   ├── Models/              # Score, TuningParameters
 │   │   ├── Services/            # MusicXMLParser, PitchMath, PitchDetector,
 │   │   │                        # ToneSynthesizer, ScoreAudioPlayer,
 │   │   │                        # ScoreLibrary, ScaleGenerator
 │   │   ├── Notation/ScoreRenderer.swift
 │   │   ├── ViewModels/          # Tuner, Scale, ScorePlayer, Practice,
-│   │   │                        # ScoreLibrary
-│   │   ├── Views/               # ContentView (TabView) + 4 tabs +
+│   │   │                        # ScoreLibrary, TuningStore
+│   │   ├── Views/               # ContentView (TabView) + 5 tabs +
 │   │   │                        # PracticeSessionView (shared by Scale and
 │   │   │                        # Practice), ScoreLibraryView, ScoreCanvasView
 │   │   └── Resources/gavotte.musicxml
@@ -334,6 +335,18 @@ Simulator audio input is often silent by default — check
 - Comments explain *why*, not *what*. Existing comments document the reasoning
   behind non-obvious choices (why autocorrelation, why per-measure staves,
   why the tolerance values are what they are) — match that.
+- **Detection constants are data, not literals.** Every timing and tolerance
+  value that decides how note-by-note detection *feels* lives in
+  `TuningParameters`, held by `TuningStore` and persisted as one JSON blob.
+  The Fine Tune tab is the Practice tab with all of them on sliders, sharing
+  the same store — so a value dialled in there really does retune Practice and
+  Scale, which is the only thing that makes tuning worth doing. `Reset`
+  restores `TuningParameters.default`, which is exactly what the app shipped
+  with. Two things about that store are load-bearing: saving is debounced
+  (a drag would otherwise encode and write on every tick), and *applying* is
+  debounced separately and harder, because buffer size can only change by
+  reinstalling the tap — undebounced, dragging that slider tears down and
+  restarts CoreAudio on every step.
 - Practice-mode tolerances (`PracticeViewModel`): the cents window is the
   player's own choice (`MatchTolerance` — easy 50, medium 35, hard 20,
   professional 10; 10 is inside an ordinary vibrato, which is the point), and

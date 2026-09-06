@@ -15,6 +15,11 @@ import SwiftUI
 struct PracticeSessionView: View {
     @ObservedObject var viewModel: PracticeViewModel
     let score: Score
+    /// Extra controls the host tab wants folded into the hideable stack — the
+    /// Fine Tune tab's parameter panel. `AnyView` rather than a generic so the
+    /// common call site stays `PracticeSessionView(viewModel:score:)`; this is
+    /// a controls bar, not a hot path.
+    var extraControls: AnyView?
 
     /// Controls hide once practice starts, so the score gets the whole screen
     /// — you're reading music at that point, not adjusting settings. Tapping
@@ -58,6 +63,7 @@ struct PracticeSessionView: View {
                         defaultTempoBPM: score.tempoBPM
                     )
                     practiceBar
+                    extraControls
                     ScoreProgressBar(
                         current: viewModel.currentIndex,
                         total: score.playableNotes.count
@@ -142,13 +148,13 @@ struct PracticeSessionView: View {
     private var toleranceButton: some View {
         HStack(spacing: Theme.Spacing.sm) {
             Menu {
-                Picker("Pitch matching", selection: $viewModel.matchTolerance) {
-                    ForEach(PracticeViewModel.MatchTolerance.allCases) { level in
-                        Text("\(level.label)  ±\(Int(level.cents))¢").tag(level)
+                ForEach(PracticeViewModel.MatchTolerance.allCases) { level in
+                    Button("\(level.label)  ±\(Int(level.cents))¢") {
+                        viewModel.select(matchTolerance: level)
                     }
                 }
             } label: {
-                Label("Matching: \(viewModel.matchTolerance.label)", systemImage: "target")
+                Label("Matching: \(viewModel.matchToleranceLabel)", systemImage: "target")
                     .font(.subheadline.weight(.medium))
                     .padding(.horizontal, Theme.Spacing.md)
                     .padding(.vertical, Theme.Spacing.sm)
@@ -156,7 +162,7 @@ struct PracticeSessionView: View {
             }
             .buttonStyle(.plain)
 
-            Text("±\(Int(viewModel.matchTolerance.cents)) cents")
+            Text("±\(Int(viewModel.currentCentsTolerance)) cents")
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
 
