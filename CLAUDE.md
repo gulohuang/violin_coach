@@ -381,6 +381,17 @@ Simulator audio input is often silent by default — check
   `ScoreRowCanvas` compares its inputs first, which is why `Score`,
   `ScoreMeasure` and `Metrics` are `Equatable`. Without it every tick
   re-engraves every visible system to produce an identical image.
+- **The 20Hz ticker must not republish the view model.** `PracticeViewModel`
+  ticks at 20Hz to run the hold clock, and it used to call
+  `objectWillChange.send()` on every tick to keep the hold meter moving. That
+  rebuilt *every* view observing it twenty times a second — including the Fine
+  Tune tab's twelve-slider panel, which starved the main thread badly enough
+  that the cursor visibly trailed notes the detector had already matched. Two
+  rules follow: the meter drives itself from a `TimelineView` so only that bar
+  repaints, and `direction` is written through `setDirection`, which publishes
+  only on a real change. Assigning the same value to a `@Published` still
+  fires `objectWillChange`, so writing `.inTune` unconditionally was a second
+  20Hz storm hiding behind the first.
 - **The hold clock runs on a timer, not on pitch readings.** `PitchDetector`
   suppresses readings identical to the last one, so a perfectly steady note
   stops publishing — checking the hold only when a reading arrives would mean

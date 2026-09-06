@@ -87,7 +87,10 @@ struct PracticeSessionView: View {
                     isWaiting: viewModel.isWaitingForNextNote,
                     direction: viewModel.direction,
                     expectedNoteLabel: viewModel.expectedNoteLabel,
-                    holdProgress: viewModel.holdProgress,
+                    // A closure, not a value: the meter reads it fresh inside
+                    // its own TimelineView, so the card doesn't need the view
+                    // model to republish for the bar to move.
+                    holdProgress: { viewModel.holdProgress },
                     requiredHold: viewModel.requiredHold
                 )
             }
@@ -256,8 +259,12 @@ private struct FeedbackCard: View {
     let isWaiting: Bool
     let direction: PitchDirection?
     let expectedNoteLabel: String
-    /// 0...1 through the sustain required for this note.
-    let holdProgress: Double
+    /// 0...1 through the sustain required for this note, read on demand.
+    ///
+    /// `@MainActor` because it reads main-actor state and is called from the
+    /// `TimelineView` below, which is main-actor too — the annotation is what
+    /// lets the compiler see that rather than take it on trust.
+    let holdProgress: @MainActor () -> Double
     let requiredHold: TimeInterval
 
     private var accent: Color {
@@ -304,12 +311,20 @@ private struct FeedbackCard: View {
                 // Without this, waiting out a half note is indistinguishable
                 // from the app having stopped responding.
                 VStack(spacing: Theme.Spacing.xs) {
-                    GeometryReader { geo in
-                        ZStack(alignment: .leading) {
-                            Capsule().fill(Theme.Palette.idle.opacity(0.22))
-                            Capsule()
-                                .fill(Theme.Palette.inTune)
-                                .frame(width: max(0, min(1, holdProgress)) * geo.size.width)
+                    // The one thing on this screen that has to repaint
+                    // continuously, and now the only thing that does. A
+                    // TimelineView redraws this bar on its own schedule
+                    // without the view model republishing, which is what used
+                    // to drag every other view — the score, the controls, the
+                    // Fine Tune sliders — along with it twenty times a second.
+                    TimelineView(.periodic(from: .now, by: 0.05)) { _ in
+                        GeometryReader { geo in
+                            ZStack(alignment: .leading) {
+                                Capsule().fill(Theme.Palette.idle.opacity(0.22))
+                                Capsule()
+                                    .fill(Theme.Palette.inTune)
+                                    .frame(width: max(0, min(1, holdProgress())) * geo.size.width)
+                            }
                         }
                     }
                     .frame(height: 6)

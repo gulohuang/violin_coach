@@ -391,7 +391,14 @@ public final class PracticeViewModel: ObservableObject {
 
     private func tick() {
         guard isActive else { return }
-        objectWillChange.send() // keeps holdProgress live
+        // Deliberately does *not* call objectWillChange. It used to, to keep
+        // the hold meter moving, and that made every view observing this model
+        // rebuild twenty times a second — including the Fine Tune tab's slider
+        // panel, which was heavy enough to starve the main thread and leave the
+        // cursor visibly trailing the notes it had already detected. The meter
+        // now drives itself from a `TimelineView`, which repaints that one bar
+        // and nothing else.
+        //
         // Re-run the comparison on every tick, not only when a reading
         // arrives. Two things depend on it: the detector suppresses readings
         // identical to the last one, so a steady note stops publishing; and
@@ -407,7 +414,7 @@ public final class PracticeViewModel: ObservableObject {
     /// Compares the last known pitch against the note the cursor is on.
     private func evaluate() {
         guard isActive, let expected = expectedNote else {
-            direction = nil
+            setDirection(nil)
             resetHold()
             return
         }
@@ -419,15 +426,19 @@ public final class PracticeViewModel: ObservableObject {
         // note yet, so grading them on it would be noise.
         if let gateEnd = acceptInputAfter {
             if now < gateEnd {
-                direction = nil
+                setDirection(nil)
                 resetHold()
                 return
             }
             acceptInputAfter = nil
+            // The gate opening is a state change nothing else publishes: the
+            // card is showing "Next note…" and would keep showing it until the
+            // player happened to sound something.
+            objectWillChange.send()
         }
 
         guard let frequency = latestFrequency else {
-            direction = nil
+            setDirection(nil)
             resetHold()
             return
         }
@@ -436,7 +447,7 @@ public final class PracticeViewModel: ObservableObject {
         let cents = PitchMath.cents(from: frequency, to: targetFrequency)
 
         guard abs(cents) <= centsTolerance else {
-            direction = cents > 0 ? .tooHigh : .tooLow
+            setDirection(cents > 0 ? .tooHigh : .tooLow)
             // Only give up on the hold once the pitch has been wrong for
             // longer than the grace window, so one bad reading inside a long
             // note doesn't send the player back to the start of it.
@@ -445,14 +456,24 @@ public final class PracticeViewModel: ObservableObject {
             } else if lastInTuneAt == nil {
                 resetHold()
             }
-            objectWillChange.send()
             return
         }
 
-        direction = .inTune
+        setDirection(.inTune)
         lastInTuneAt = now
         if holdStart == nil { holdStart = now }
         // Completion is decided by the ticker, not here — see tickCancellable.
+    }
+
+    /// Publishes only on a real change.
+    ///
+    /// `evaluate()` runs twenty times a second, and assigning the same value to
+    /// a `@Published` still fires `objectWillChange` — so writing `.inTune`
+    /// unconditionally re-rendered every observing view on every tick of a
+    /// perfectly steady note.
+    private func setDirection(_ new: PitchDirection?) {
+        guard direction != new else { return }
+        direction = new
     }
 
     private func resetHold() {
