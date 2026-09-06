@@ -68,6 +68,13 @@ Layering, strictly one-directional (`Views → ViewModels → Services → Model
 | Practice | `PracticeView` | `PracticeViewModel` | `PitchDetector` + `ScoreRenderer` |
 | Fine Tune | `FineTuneView` | `PracticeViewModel` + `TuningStore` | same as Practice |
 
+**Stopping is always one tap away.** The controls fade when practice starts,
+which left Stop reachable only by tapping the score first — two taps, the
+second not obvious. `PracticeSessionView` keeps a floating Stop button in the
+hidden state for exactly that. The Fine Tune tab opts out of the fade
+entirely (`hidesControlsWhilePracticing: false`): a tuning screen that hides
+its sliders the moment you start the thing being tuned is no use.
+
 The Scale and Practice tabs share one practice screen. `PracticeSessionView`
 holds the score canvas, the controls, the feedback card and the transport;
 `PracticeViewModel` holds the hold clock, the gate between notes and the

@@ -20,6 +20,13 @@ struct PracticeSessionView: View {
     /// common call site stays `PracticeSessionView(viewModel:score:)`; this is
     /// a controls bar, not a hot path.
     var extraControls: AnyView?
+    /// Whether starting practice clears the controls off screen.
+    ///
+    /// True for Practice and Scale, where you want the whole screen for the
+    /// music. False for Fine Tune, where the controls *are* the reason you're
+    /// there — a tuning screen that hides its sliders the moment you start the
+    /// thing being tuned is no use.
+    var hidesControlsWhilePracticing = true
 
     /// Controls hide once practice starts, so the score gets the whole screen
     /// — you're reading music at that point, not adjusting settings. Tapping
@@ -111,23 +118,41 @@ struct PracticeSessionView: View {
         // Starting practice clears the chrome; stopping brings it back, so the
         // Start button is never stranded behind a hidden bar.
         .onChange(of: viewModel.isActive) { active in
+            guard hidesControlsWhilePracticing else { return }
             withAnimation(Theme.Motion.gentle) { showsControls = !active }
         }
         // Arriving on a screen shows its controls, whatever state the last
         // session left them in.
-        .onAppear { showsControls = !viewModel.isActive }
+        .onAppear {
+            showsControls = hidesControlsWhilePracticing ? !viewModel.isActive : true
+        }
         .overlay(alignment: .bottom) {
-            // The only way back to the controls once they're hidden, so it has
-            // to be discoverable — shown briefly rather than never.
+            // Stopping must never be more than one tap away. The controls fade
+            // when practice starts, which used to leave Stop reachable only by
+            // tapping the score first — two taps, and the second one not
+            // obvious. So the hidden state keeps its own Stop button, and the
+            // caption that used to sit here rides along with it.
             if viewModel.isActive && !showsControls {
-                Text("Tap the score for controls")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, Theme.Spacing.sm)
-                    .padding(.vertical, 4)
-                    .background(Capsule().fill(Theme.Palette.cardSurface.opacity(0.9)))
-                    .padding(.bottom, Theme.Spacing.sm)
-                    .transition(.opacity)
+                VStack(spacing: 4) {
+                    Button {
+                        viewModel.stop()
+                    } label: {
+                        Label("Stop", systemImage: "stop.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, Theme.Spacing.lg)
+                            .padding(.vertical, Theme.Spacing.sm)
+                            .background(Capsule().fill(Theme.Palette.stop))
+                            .shadow(color: Theme.Palette.stop.opacity(0.35), radius: 8, x: 0, y: 3)
+                    }
+                    .buttonStyle(.plain)
+
+                    Text("Tap the score for controls")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.bottom, Theme.Spacing.md)
+                .transition(.opacity)
             }
         }
     }
