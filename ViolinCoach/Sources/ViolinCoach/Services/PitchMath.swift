@@ -1,3 +1,4 @@
+import Accelerate
 import Foundation
 
 /// Pure pitch-detection math, kept free of AVFoundation so it can be unit
@@ -96,15 +97,26 @@ public enum PitchMath {
         let windowSize = n - maxTau
         guard maxTau > minTau, windowSize >= 256 else { return nil }
 
-        // Step 1: difference function.
+        // Step 1: difference function, d(tau) = Σ (x[j] - x[j+tau])².
+        //
+        // This is the entire cost of YIN — around 320 lags × 1700 samples, half
+        // a million multiply-adds — and it runs about a dozen times a second.
+        // Written as a plain Swift loop it is quick enough in a release build
+        // and *not* quick enough in a debug one, where bounds checks and
+        // un-inlined `Double(_:)` conversions cost an order of magnitude. That
+        // mattered more than it looks: once one analysis outlasts one buffer,
+        // the detector falls behind the player and never catches back up.
+        //
+        // `vDSP_distancesq` is exactly this sum, and being a precompiled
+        // Accelerate routine it is vectorised whatever this target is built at.
         var diff = [Double](repeating: 0, count: maxTau + 1)
-        for tau in 1...maxTau {
-            var sum = 0.0
-            for j in 0..<windowSize {
-                let delta = Double(buffer[j]) - Double(buffer[j + tau])
-                sum += delta * delta
+        buffer.withUnsafeBufferPointer { samples in
+            guard let base = samples.baseAddress else { return }
+            for tau in 1...maxTau {
+                var sum: Float = 0
+                vDSP_distancesq(base, 1, base + tau, 1, &sum, vDSP_Length(windowSize))
+                diff[tau] = Double(sum)
             }
-            diff[tau] = sum
         }
 
         // Step 2: cumulative mean normalized difference. This is what stops

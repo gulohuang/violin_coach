@@ -171,17 +171,30 @@ public final class PitchDetector: ObservableObject {
     /// read at `start()`.
     public var analysisWindow: Int = TuningParameters.default.analysisWindow
 
-    /// Drop-if-busy flag. Buffers arriving while an analysis is in flight are
+    /// Drop-if-busy gate. Buffers arriving while an analysis is in flight are
     /// dropped rather than queued: a tuner wants the *latest* reading, and an
     /// unbounded backlog is what made the original stall unrecoverable.
     ///
-    /// It lives off the actor in a box because it is touched from
-    /// `analysisQueue`, not the main thread. That queue is serial, so every
-    /// access to `isBusy` is already serialized with respect to every other —
-    /// which is what makes the `@unchecked` conformance honest rather than a
-    /// papering-over.
+    /// The test-and-set has to happen **at the tap, before dispatching**, and
+    /// it has to be atomic. The first version put a plain `isBusy` check
+    /// *inside* the queued block, which cannot ever drop anything: the queue is
+    /// serial, so by the time a block runs the previous one has already
+    /// finished and cleared the flag. Every buffer was therefore queued and
+    /// analysed in order, and whenever an analysis outlasted a buffer period —
+    /// which a debug build easily does — the backlog grew without bound and the
+    /// displayed note fell further and further behind the played one. That is
+    /// the "played D4 then A4, saw D4 for three seconds" bug.
+    ///
+    /// A semaphore with a zero timeout is a non-blocking try-acquire, safe to
+    /// call from the tap's thread; the queued block signals it when done.
     private final class AnalysisGate: @unchecked Sendable {
-        var isBusy = false
+        private let inFlight = DispatchSemaphore(value: 1)
+
+        /// True if this buffer may proceed; false means one is already being
+        /// analysed and this buffer is discarded.
+        func tryBegin() -> Bool { inFlight.wait(timeout: .now()) == .success }
+        func end() { inFlight.signal() }
+
         /// So the buffer-size report below is printed once per run rather than
         /// a dozen times a second.
         var hasReportedBufferSize = false
@@ -257,22 +270,32 @@ public final class PitchDetector: ObservableObject {
                 input.removeTap(onBus: 0)
                 input.installTap(onBus: 0, bufferSize: bufferSize, format: format) { [weak self] buffer, _ in
                     guard let self, let channelData = buffer.floatChannelData else { return }
-                    // Keep this callback cheap — it runs on a real-time audio
-                    // thread. Copy what's needed and get off it immediately.
-                    let frameCount = min(Int(buffer.frameLength), window)
-                    let samples = Array(UnsafeBufferPointer(start: channelData[0], count: frameCount))
-
                     // What the tap *actually* delivers, which is not
                     // necessarily what was asked for: `bufferSize` is a hint,
                     // and the implementation is free to pick another size —
                     // it can never go below the hardware I/O buffer above.
                     // This is the number that sets the detection rate.
                     let deliveredFrames = Int(buffer.frameLength)
+                    guard deliveredFrames > 0 else { return }
+
+                    // Dropped here, before dispatching — the only place a
+                    // buffer *can* be dropped, see `AnalysisGate`. It also
+                    // saves copying samples nothing was going to look at.
+                    guard gate.tryBegin() else { return }
+
+                    // Keep this callback cheap — it runs on a real-time audio
+                    // thread. Copy what's needed and get off it immediately.
+                    //
+                    // The *newest* samples in the buffer, not the oldest. The
+                    // window is half the buffer, so taking the front of it meant
+                    // every reading described audio that was already a buffer
+                    // period stale before analysis even started.
+                    let frameCount = min(deliveredFrames, window)
+                    let offset = deliveredFrames - frameCount
+                    let samples = Array(UnsafeBufferPointer(start: channelData[0] + offset, count: frameCount))
 
                     analysisQueue.async {
-                        guard !gate.isBusy else { return } // drop, don't queue
-                        gate.isBusy = true
-                        defer { gate.isBusy = false }
+                        defer { gate.end() }
 
                         #if DEBUG
                         if !gate.hasReportedBufferSize {
