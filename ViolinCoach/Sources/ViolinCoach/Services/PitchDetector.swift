@@ -157,19 +157,31 @@ public final class PitchDetector: ObservableObject {
 
     /// Pitch detection is far too expensive to run on the main thread: YIN's
     /// difference function costs hundreds of thousands of operations per
-    /// buffer, and buffers arrive ~12 times a second. Doing that on the
-    /// MainActor starved the UI badly enough that tab switches and button
-    /// taps stopped registering. It doesn't belong on the tap's thread either
+    /// buffer, and buffers arrive ~47 times a second at the default hop.
+    /// Doing that on the MainActor starved the UI badly enough that button
+    /// taps and tab switches stopped registering. It doesn't belong on the
+    /// tap's thread either
     /// — that's a real-time audio callback, and blocking it causes glitches —
     /// so analysis gets a queue of its own and only the result hops back.
     /// `nonisolated` because the audio tap reaches it from its own thread;
     /// a `let` of a Sendable type is safe to read from anywhere.
     private nonisolated let analysisQueue = DispatchQueue(label: "com.violincoach.pitch-analysis", qos: .userInitiated)
 
-    /// Samples analyzed per buffer. More than this buys no accuracy in the
-    /// violin's range, and YIN needs room for its longest lag on top. Also
-    /// read at `start()`.
+    /// Samples per analysis — always the newest `analysisWindow` of them,
+    /// pooled across tap buffers by the ring below. More than this buys no
+    /// accuracy in the violin's range, and YIN needs room for its longest
+    /// lag on top. Also read at `start()`.
     public var analysisWindow: Int = TuningParameters.default.analysisWindow
+
+    /// Accumulates the newest `analysisWindow` samples across tap callbacks,
+    /// which is what lets the tap buffer (the hop) be small while the window
+    /// stays long — see `SampleRing` for why that split is the fix for the
+    /// pitch display trailing the instrument. Allocated once at the largest
+    /// window on offer; `reset` only moves indices, so it never reallocates
+    /// under a live tap.
+    private nonisolated let ring = SampleRing(
+        maximumWindow: TuningParameters.analysisWindowChoices.max() ?? 4096
+    )
 
     /// Drop-if-busy gate. Buffers arriving while an analysis is in flight are
     /// dropped rather than queued: a tuner wants the *latest* reading, and an
@@ -212,6 +224,9 @@ public final class PitchDetector: ObservableObject {
     /// back after it — the reason Stop appeared to do nothing.
     private var runToken = 0
 
+    /// When the level meter last moved, for its time-based ballistics.
+    private var lastMeterUpdate: Date?
+
     public init() {}
 
     public func start() async {
@@ -228,11 +243,21 @@ public final class PitchDetector: ObservableObject {
         // Everything that can block goes to the audio queue; the main actor
         // only waits on the continuation, which doesn't hold up the run loop.
         let started = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-            audioQueue.async { [engineBox, analysisQueue, gate] in
+            audioQueue.async { [engineBox, analysisQueue, gate, ring] in
                 let engine = engineBox.engine
                 do {
                     let session = AVAudioSession.sharedInstance()
                     try session.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker, .mixWithOthers])
+                    // The hardware I/O buffer is a floor under the tap: the
+                    // tap can never fire more often than the hardware hands
+                    // audio over, and the default for .playAndRecord can be
+                    // ~23 ms. Ask for one hop's worth. A request, not a
+                    // command — iOS clamps it to what the route supports,
+                    // which is why the DEBUG line below reports what was
+                    // actually granted. Failure to grant is not failure to
+                    // run, hence try?.
+                    let hardwareRate = max(8_000, session.sampleRate)
+                    try? session.setPreferredIOBufferDuration(Double(bufferSize) / hardwareRate)
                     try session.setActive(true)
                 } catch {
                     #if DEBUG
@@ -268,6 +293,7 @@ public final class PitchDetector: ObservableObject {
                 #endif
 
                 input.removeTap(onBus: 0)
+                ring.reset(window: window)
                 input.installTap(onBus: 0, bufferSize: bufferSize, format: format) { [weak self] buffer, _ in
                     guard let self, let channelData = buffer.floatChannelData else { return }
                     // What the tap *actually* delivers, which is not
@@ -278,21 +304,27 @@ public final class PitchDetector: ObservableObject {
                     let deliveredFrames = Int(buffer.frameLength)
                     guard deliveredFrames > 0 else { return }
 
+                    // Every buffer lands in the ring, including ones the
+                    // gate is about to drop: a dropped *analysis* is fine,
+                    // but a hole in the audio is not — the next reading would
+                    // describe two disjoint moments stitched together. The
+                    // append is a bounded memcpy, cheap enough for the
+                    // real-time audio thread this callback runs on.
+                    ring.append(channelData[0], count: deliveredFrames)
+
                     // Dropped here, before dispatching — the only place a
-                    // buffer *can* be dropped, see `AnalysisGate`. It also
-                    // saves copying samples nothing was going to look at.
+                    // buffer *can* be dropped, see `AnalysisGate`.
                     guard gate.tryBegin() else { return }
 
-                    // Keep this callback cheap — it runs on a real-time audio
-                    // thread. Copy what's needed and get off it immediately.
-                    //
-                    // The *newest* samples in the buffer, not the oldest. The
-                    // window is half the buffer, so taking the front of it meant
-                    // every reading described audio that was already a buffer
-                    // period stale before analysis even started.
-                    let frameCount = min(deliveredFrames, window)
-                    let offset = deliveredFrames - frameCount
-                    let samples = Array(UnsafeBufferPointer(start: channelData[0] + offset, count: frameCount))
+                    // The newest `window` samples, which usually span several
+                    // buffers — decoupling the window from the hop is what
+                    // lets the hop (and so the display latency) be small.
+                    // Nil only right after a start, before one full window
+                    // has been heard.
+                    guard let samples = ring.latest() else {
+                        gate.end()
+                        return
+                    }
 
                     analysisQueue.async {
                         defer { gate.end() }
@@ -359,6 +391,7 @@ public final class PitchDetector: ObservableObject {
         note = nil
         level = 0
         clarity = 0
+        lastMeterUpdate = nil
 
         // Teardown is the slow part; let it happen off the main thread.
         audioQueue.async { [engineBox] in
@@ -373,8 +406,16 @@ public final class PitchDetector: ObservableObject {
 
         // Meter ballistics: rise quickly so an attack registers, fall slowly
         // so the bar stays readable instead of flickering between buffers.
+        // Expressed as time constants rather than per-reading fractions
+        // because the reading rate is user-tunable now — fixed fractions
+        // made the meter's feel change with the buffer-size slider. The
+        // constants reproduce the shipped feel at the old 85 ms rate.
+        let now = Date()
+        let dt = min(1, lastMeterUpdate.map { now.timeIntervalSince($0) } ?? 1)
+        lastMeterUpdate = now
         let target = PitchMath.meterLevel(rms: rms)
-        let smoothing = target > level ? 0.6 : 0.15
+        let tau = target > level ? 0.09 : 0.52
+        let smoothing = 1 - exp(-dt / tau)
         let newLevel = level + (target - level) * smoothing
         if abs(newLevel - level) > 0.005 { level = newLevel }
 

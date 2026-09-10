@@ -94,7 +94,15 @@ enum Theme {
     // MARK: - Motion
 
     enum Motion {
-        /// For values that track live input (the tuner needle) — quick, barely damped.
+        /// For readouts that track live input — the tuner needle and arc,
+        /// the level bar, the too-high/too-low capsule. Short and
+        /// overshoot-free: readings arrive every ~20 ms, so each new value
+        /// retargets this ease mid-flight and the sum is a light smoothing.
+        /// These used to ride the springs below, whose ~0.3–0.5 s settle
+        /// showed up as the display trailing the instrument — most of the
+        /// perceived detection lag was this, not the detector.
+        static let live = Animation.easeOut(duration: 0.08)
+        /// For control feedback (pressed states and the like) — quick, barely damped.
         static let responsive = Animation.spring(response: 0.28, dampingFraction: 0.72)
         /// For state changes the user reads (feedback words, transport state).
         static let gentle = Animation.spring(response: 0.42, dampingFraction: 0.85)

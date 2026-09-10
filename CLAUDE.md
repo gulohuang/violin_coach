@@ -20,7 +20,8 @@ to Python and run against synthetic violin-range tones (all within 0.014%),
 against a weak-fundamental violin timbre to confirm it does *not* drop
 octaves, and against noise and silence to confirm rejection. The score
 row-packing and tap hit-testing were likewise round-tripped in Python at
-several screen widths. `PitchMathTests` and `ScoreRendererSpellingTests`
+several screen widths, and so was `SampleRing`'s index math (every hop
+shape: smaller, equal, larger than the window, and ragged). `PitchMathTests` and `ScoreRendererSpellingTests`
 encode those same cases. So the *math* is trustworthy; the *Swift/Xcode
 integration* is not yet.
 
@@ -177,6 +178,25 @@ numbering.
   `4 + 5 + 4` spacings — see `Stave.getBottomY()`. `ScoreRenderer.staveExtentInSpaces`
   encodes this. Sizing a canvas by the five staff lines alone silently crops
   the clef and every stem, which is exactly the bug it was written to fix.
+- **The hop and the analysis window are decoupled by a ring buffer.**
+  One tap callback used to be one analysis, so a 2048-sample YIN window
+  forced a 4096-frame tap — an 85 ms gap between readings, with the older
+  half of every buffer discarded unanalysed. That wait, not the analysis,
+  was the pitch-display lag on every detector-driven tab. `SampleRing`
+  keeps the newest `analysisWindow` samples across however many tap
+  buffers it takes, so the tap defaults to 1024 frames (~21 ms — the hop,
+  and therefore the detector's share of the latency) while YIN still sees
+  its full window; the detector also asks the session for an I/O buffer no
+  bigger than the hop, since the hardware buffer is a floor under it. Every
+  buffer is appended to the ring even when the drop-if-busy gate skips its
+  analysis — a dropped analysis is fine, a hole in the audio is not.
+- **Nothing that tracks live input animates on a spring.** The tuner
+  needle, the arc fill, the level bar and the too-high/too-low capsule use
+  `Theme.Motion.live`, a short overshoot-free ease that each fresh reading
+  retargets mid-flight. They used to ride 0.28–0.42 s springs, whose settle
+  time *was* most of the perceived detection lag — the display trailed an
+  instrument the detector had already heard. Springs stay for what they're
+  for: pressed states and discrete transitions.
 - **Audio engines never touch the main thread.** `AVAudioSession.setActive`,
   `AVAudioEngine.prepare()`/`.start()`/`.stop()` are synchronous CoreAudio
   calls that block for hundreds of milliseconds. `PitchDetector` and
@@ -212,8 +232,9 @@ violin_coach/
 │   │   ├── ViolinCoachApp.swift # @main
 │   │   ├── Models/              # Score, TuningParameters
 │   │   ├── Services/            # MusicXMLParser, PitchMath, PitchDetector,
-│   │   │                        # ToneSynthesizer, ScoreAudioPlayer,
-│   │   │                        # ScoreLibrary, ScaleGenerator
+│   │   │                        # SampleRing, ToneSynthesizer,
+│   │   │                        # ScoreAudioPlayer, ScoreLibrary,
+│   │   │                        # ScaleGenerator
 │   │   ├── Notation/ScoreRenderer.swift
 │   │   ├── ViewModels/          # Tuner, Scale, ScorePlayer, Practice,
 │   │   │                        # ScoreLibrary, TuningStore

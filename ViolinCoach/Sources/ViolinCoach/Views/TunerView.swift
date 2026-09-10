@@ -191,7 +191,7 @@ private struct TunerGauge: View {
                     .stroke(style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
                     .foregroundStyle(indicatorColor)
                     .padding(lineWidth / 2)
-                    .animation(Theme.Motion.responsive, value: progress)
+                    .animation(Theme.Motion.live, value: progress)
                 }
 
                 tickMarks(center: center, radius: radius, lineWidth: lineWidth)
@@ -210,7 +210,7 @@ private struct TunerGauge: View {
                     .stroke(style: StrokeStyle(lineWidth: max(3, lineWidth * 0.28), lineCap: .round))
                     .foregroundStyle(indicatorColor)
                     .padding(lineWidth / 2)
-                    .animation(Theme.Motion.responsive, value: progress)
+                    .animation(Theme.Motion.live, value: progress)
                 }
 
                 readout
@@ -420,7 +420,7 @@ private struct InputLevelBar: View {
                     Capsule()
                         .fill(isAboveThreshold ? Theme.Palette.inTune : Theme.Palette.idle.opacity(0.6))
                         .frame(width: max(0, min(1, level)) * geo.size.width)
-                        .animation(Theme.Motion.responsive, value: level)
+                        .animation(Theme.Motion.live, value: level)
 
                     // Threshold marker
                     Rectangle()

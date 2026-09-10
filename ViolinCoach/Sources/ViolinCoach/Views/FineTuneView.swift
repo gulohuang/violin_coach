@@ -150,7 +150,7 @@ private struct TuningPanel: View {
     /// therefore moves over *indices* into the choice list.
     private var bufferSlider: some View {
         let choices = TuningParameters.bufferSizeChoices
-        let index = choices.firstIndex(of: tuning.parameters.tapBufferFrames) ?? 3
+        let index = choices.firstIndex(of: tuning.parameters.tapBufferFrames) ?? 2
         let frames = tuning.parameters.tapBufferFrames
         let period = Double(frames) / sampleRate
         return VStack(alignment: .leading, spacing: 2) {
@@ -179,7 +179,7 @@ private struct TuningPanel: View {
 
     private var windowSlider: some View {
         let choices = TuningParameters.analysisWindowChoices
-        let index = choices.firstIndex(of: tuning.parameters.analysisWindow) ?? 2
+        let index = choices.firstIndex(of: tuning.parameters.analysisWindow) ?? 1
         let window = tuning.parameters.analysisWindow
         return VStack(alignment: .leading, spacing: 2) {
             HStack {
@@ -197,7 +197,7 @@ private struct TuningPanel: View {
                 in: 0...Double(choices.count - 1),
                 step: 1
             )
-            Text(String(format: "%.1f ms of audio per reading · anything past the buffer is unused",
+            Text(String(format: "%.1f ms of audio per reading · pooled across buffers",
                         Double(window) / sampleRate * 1000))
                 .font(.caption2)
                 .foregroundStyle(.secondary)

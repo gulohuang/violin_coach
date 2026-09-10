@@ -335,7 +335,10 @@ private struct FeedbackCard: View {
                 .background(
                     Capsule().fill(accent.opacity(0.12))
                 )
-                .animation(Theme.Motion.gentle, value: direction)
+                // Live pitch feedback, not a state transition: on `gentle`
+                // the word arrived ~0.4 s after the detector knew, which
+                // read as the app grading the previous note.
+                .animation(Theme.Motion.live, value: direction)
 
                 // How much of the note's length still has to be sustained.
                 // Without this, waiting out a half note is indistinguishable
